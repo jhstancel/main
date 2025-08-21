@@ -1,6 +1,10 @@
-CXX ?= g++
-CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Iinclude
-LDFLAGS ?=
+# =========================
+#   CPSC 2120 Makefile
+# =========================
+
+CXX       := g++
+CXXFLAGS  := -std=c++17 -O2 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -MMD -MP -Iinclude
+LDFLAGS   :=
 BUILD_DIR := build
 
 DEMOS := \
@@ -13,11 +17,14 @@ DEMOS := \
     graphs_demo \
     algorithms_demo
 
+# Default: build all demos
 all: $(addprefix $(BUILD_DIR)/,$(DEMOS))
 
+# Create build directory if missing
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+# Demo targets
 $(BUILD_DIR)/linked_list_demo: src/linked_lists/singly_linked_list.cpp tests/demo_linked_list.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
@@ -42,11 +49,32 @@ $(BUILD_DIR)/graphs_demo: src/graphs/bfs.cpp src/graphs/dfs.cpp tests/demo_graph
 $(BUILD_DIR)/algorithms_demo: src/algorithms/dynamic_programming.cpp tests/demo_algorithms.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
-run: # make run DEMO=sorting_demo
-	@[ -n "$(DEMO)" ] || (echo "Specify DEMO=<target> (e.g., sorting_demo)"; exit 1)
+# ------------------------
+#   Utility Targets
+# ------------------------
+
+# Run a single demo: make run DEMO=sorting_demo
+run:
+	@[ -n "$(DEMO)" ] || (echo "Usage: make run DEMO=<target>"; exit 1)
 	@$(BUILD_DIR)/$(DEMO)
 
+# Format code with clang-format
+format:
+	./scripts/format_code.sh
+
+# Run all demos automatically
+test:
+	./scripts/run_all_tests.sh
+
+# Run valgrind memory check on all demos
+valgrind:
+	./scripts/valgrind_check.sh
+
+# Remove build directory & artifacts
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all run clean
+# Auto-include dependency files
+-include $(BUILD_DIR)/*.d
+
+.PHONY: all run format test valgrind clean
