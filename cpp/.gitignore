@@ -1,0 +1,47 @@
+# =========================
+#   CPSC2120 Project
+# =========================
+
+# --- Build & Binary Artifacts ---
+build/
+*.o
+*.out
+*.exe
+*.obj
+*.pdb
+*.ilk
+
+# --- Test binaries ---
+*_demo
+
+# --- Logs & Reports ---
+*.log
+*.dSYM/
+*.gcda
+*.gcno
+*.gcov
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db
+
+# --- IDE / Editor Files ---
+.vscode/
+.idea/
+*.code-workspace
+
+# --- CMake / Ninja Cache ---
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Makefile
+CMakeScripts/
+CTestTestfile.cmake
+build.ninja
+
+# --- Temp & Backup Files ---
+*~
+*.swp
+*.swo
+
