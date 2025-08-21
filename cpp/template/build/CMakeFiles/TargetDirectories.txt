@@ -1,0 +1,3 @@
+/Users/JohnStancel/code/cpp/template/build/CMakeFiles/template.dir
+/Users/JohnStancel/code/cpp/template/build/CMakeFiles/edit_cache.dir
+/Users/JohnStancel/code/cpp/template/build/CMakeFiles/rebuild_cache.dir
