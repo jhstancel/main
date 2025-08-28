@@ -1,0 +1,1 @@
+-1 -4.7293876 longListOfCamelCaseWords
