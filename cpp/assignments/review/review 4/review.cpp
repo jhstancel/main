@@ -5,18 +5,19 @@
 Your name (username): John Stancel
 Date submitted: 9/5/2025
 Lab section: #2
-Assignment name: review 3
+Assignment name: review
 */
 
 
-// this function will return the amount of inputs before 'q' is reached
-void ReadStdIn2(){
+// this function will return the string entered into the terminal until 'q'
+void ReadWrite(){
     std::string input = "";
-    int count = 0;
+    std::string output = "";
     std::cin >> input;
     while (input != "q") {
-        count++;
+        output += input + " ";
         std::cin >> input;
     }
-    std::cout << count;
+    std::cout << output << std::endl;
+
 }

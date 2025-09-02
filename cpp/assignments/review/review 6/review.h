@@ -3,9 +3,6 @@
 
 #include <string>
 
-#include <vector>
-
-void ReadStdIn2();
-
+void LoopThrough(double * data, int size);
 
 #endif

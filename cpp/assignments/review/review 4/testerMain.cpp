@@ -2,6 +2,6 @@
 #include "review.h"
 
 int main() {
-    ReadStdIn2();
+    ReadWrite();
     return 0;
 }

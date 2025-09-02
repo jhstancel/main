@@ -3,9 +3,6 @@
 
 #include <string>
 
-#include <vector>
-
-void ReadStdIn2();
-
+int Fibonacci(int a);
 
 #endif

@@ -5,7 +5,8 @@
 
 #include <vector>
 
-void ReadStdIn2();
 
+
+std::vector <int> InitializeArray(int size);
 
 #endif
