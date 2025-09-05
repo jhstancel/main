@@ -1,0 +1,1052 @@
+"""
+Notes:
+
+currently:
+    - working on automation
+        - for some odd reason the resources variable is empty unless the menu is opened? if opened it is fixed for rest
+            of game
+        - graphic for automation
+
+
+- Automation tool (DONE BABY)
+- mapdata needs to be profile-specific, not universal (FUCK YES I DID IT)
+- put shit into other sections of menu
+- Sound effect for things with variations
+    - Upgrading land
+    - Different tiers of sounds
+- Tutorial
+- Seed economy
+    - Buy handfuls of seeds (5?) for coins and lower tier seeds (i.e. 5 wheat seeds cost 15 cocoa seeds and 20 coins)
+- Adaptable menu
+- Droughts, fires, natural disasters
+- Animal / Kshtimi raid where after a random interval of time they spawn, if you don't kill them they will cause
+    - a plague similar to the black death
+    `- hire a farmer to save your crops / patrol them
+- Loading animation for crops is them progressing, not just a bar
+- Water plants
+- Tips at beginning of game
+- Not using cover crops leads to bad harvest, using them leads to some early extra good harvests
+- Taxes
+- Var "root" needs to be created based on players directory every time the game is launched
+- Farm tiles should have 3 tiers of variety, rng roll to see which is displayed for less redundancies
+- Sell list needs to be based off inventory
+    - (
+
+        if user has wheat, display wheat
+
+        need to make a list with coords to display each material
+
+        )
+
+- Tiers of crops
+    - Low tier crops (i.e. chili peppers, broccoli, onions, potatoes, carrots)
+    - Mid tier crops (i.e. tomatoes, wheat, cabbage, cotton, )
+    - High tier crops (i.e grapes, flowers, wild berries ( art should have strawberries, blueberries, blackberries, )
+    - Lucrative tier crops (i.e cannabis (see note below), coca plant, peyote, mushrooms)
+
+    cannabis - should you have to either get a license and sell for less or take the risk of farming illegally,
+    making more money and now having to hav ea license and pay taxes on it?
+
+
+map.txt template
+32000000
+21000000
+10000000
+00000000
+
+idea 12.18.24: maybe a 2x2 of a farm type increases efficiency and turns it into a plantation?
+"""
+# Imports
+import sys
+import time
+import pygame
+from pygame.locals import *
+import utils as f
+import itertools
+import random
+import os
+
+# Colors
+WHITE = [255, 255, 255]
+GREEN = [0, 255, 0]
+BLUE = [0, 0, 255]
+BLACK = [0, 0, 0]
+RED = [255, 0, 0]
+
+# Global Variables
+gameName = "TYCOON"
+# root = ''.join([char + '\\' if char == '\\' else char for char in os.getcwd()]) + "\\\\saveFiles\\\\"
+root = os.path.dirname(os.path.realpath(__file__)) + "\\saveFiles\\"
+userName = f.logIn()
+if not userName:
+    print("Created new account.")
+    time.sleep(3)
+    exit("Created new account.")
+
+cocoaMinusCoordinates = (538, 352)
+wheatMinusCoordinates = (538, 311)
+wheatPlusCoordinates = (500, 311)
+goldMinusCoordinates = (538, 247)
+cocoaPlusCoordinates = (500, 352)
+goldPlusCoordinates = (500, 247)
+
+automationOpened = False
+tempShapeToggler = False
+resourcesOpened = False
+demoToggler = False
+marketOpened = False
+menuActive = False
+cocoaEmpty = False
+srm = False
+
+selectedMenuButton = None
+selectedButton = None
+selectedTile = None
+toolActive = None
+display_message = ""
+message_start_time = 0
+message_duration = 3  # Message stays on screen for 3 seconds
+message_position = (0, 0)  # Position where the message should appear
+
+buildingToolTog = 1
+cocoaFullInt = 100  # maybe put this in the class
+wheatFullInt = 100  # maybe put this in the class
+farmingToolTog = 1
+wheatSeedsTog = 1
+cocoaSeedsTog = 1
+automationTog = 0
+resourcesTog = 0
+demoTog = 0
+marketTog = 0
+menuTog = 0
+
+saveInformation = []
+cocoaFarmList = []
+wheatFarmList = []
+tileList = []
+autoData = []
+
+
+class land:
+    def __init__(self):
+        self.farmType = None
+        self.neighbors = []
+        self.tileLocation = 0  # 0, 1, 2, etc...
+        self.location = 0, 0  # x, y
+        self.update = 0  # int corresponding to the progress till the farm is harvestable
+        self.reward = 5  # how much the player is rewarded for harvesting the farm
+        self.rate = 1  # how fast the farm is growing
+        self.auto = 0
+
+    def makeNeighbors(self):
+        tileIsNotOnTopBorder = True
+        tileIsNotOnLeftBorder = True
+
+        if self.tileLocation < 8:
+            tileIsNotOnTopBorder = False
+        if self.tileLocation == 0 or self.tileLocation == 8 or self.tileLocation == 16 or self.tileLocation == 24:
+            tileIsNotOnLeftBorder = False
+        if tileIsNotOnLeftBorder and tileIsNotOnTopBorder:
+            self.neighbors = [self.tileLocation - 8, self.tileLocation + 1,
+                              self.tileLocation + 8, self.tileLocation - 1]
+        elif not tileIsNotOnTopBorder:  # this runs if tileLocation is on the top border
+            self.neighbors = [None, self.tileLocation + 1,
+                              self.tileLocation + 8, self.tileLocation - 1]
+        elif not tileIsNotOnLeftBorder:  # this runs if tileLocation is on the left border
+            self.neighbors = [self.tileLocation - 8, self.tileLocation + 1,
+                              self.tileLocation + 8, None]
+
+
+class farm(land):
+    # the following two functions can be altered in a way to change the value or speed of which the player can gain
+    #  rewards from the given farm
+    def upgrade(self):  # this function continuously refreshes and adds up the self.update variable at the self.rate
+        if self.farmType == 4 or self.farmType == "4":
+            if self.update < wheatFullInt:
+                self.update += self.rate
+        elif self.farmType == 3 or self.farmType == "3":
+            if self.update < cocoaFullInt:
+                self.update += self.rate
+
+    def rewardUpdate(self):  # this function adds the given rewards to the player
+        if self.farmType == 3 or self.farmType == "3":  # cocoa
+            saveInformation[2] = int(saveInformation[2]) + self.reward  # self.reward = 5
+        elif self.farmType == 4 or self.farmType == "4":  # wheat
+            saveInformation[1] = int(saveInformation[1]) + self.reward
+        f.lineUpdater(root + userName, saveInformation)
+
+    def displayFarm(self, screen, iconTypes, iconPos, progressBarTypes, wheatStages, cocoaStages):
+        if self.farmType == 3:  # cocoa
+            if self.update < cocoaFullInt / 3:
+                stage = 0
+            elif cocoaFullInt / 3 <= self.update < 2 * (cocoaFullInt / 3):
+                stage = 1
+            else:
+                stage = 2
+            screen.blit(cocoaStages[stage], iconPos[self.location[0]][self.location[1]])
+        elif self.farmType == 4:  # wheat
+            if self.update < wheatFullInt / 3:
+                stage = 0
+            elif wheatFullInt / 3 <= self.update < 2 * (wheatFullInt / 3):
+                stage = 1
+            else:
+                stage = 2
+            screen.blit(wheatStages[stage], iconPos[self.location[0]][self.location[1]])
+
+
+def menuDisplay(screen, font, menu, inMenuButtons, inScreenButtonX, inMenuResourcesTextBox, inMenuBazaarTextBox, plus,
+                minus):
+    global resourcesOpened, automationOpened, resourcesTog, saveInformation, marketOpened, marketTog
+    screen.blit(menu, (screen.get_width() - 1.25 * menu.get_width(), screen.get_height() - 1.25 * menu.get_height()))
+    __ = plus
+    """
+    inMenuButtons = [inMenuButton, inMenuButtonMaterials, inMenuButtonMaterialsToggled, inMenuButtonBazaar, 
+                     inMenuButtonBazaarToggled, inMenuButtonAutomation, inMenuButtonAutomationToggled]
+    """
+
+    # button 1
+    screen.blit(inMenuButtons[1], (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 71)) \
+        if not resourcesOpened else screen.blit(inMenuButtons[2],
+                                                (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 71))
+
+    # button 2
+    screen.blit(inMenuButtons[0], (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 131))
+    """
+    this makes the 2nd button say "automation"
+    screen.blit(inMenuButtons[5], (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 131)) \
+        if not automationOpened else screen.blit(inMenuButtons[6],
+                                                 (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 131)
+                                                 )"""
+    # button 3
+    screen.blit(inMenuButtons[0], (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 191))
+    # button 4
+    screen.blit(inMenuButtons[0], (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 251))
+    # button 5
+    screen.blit(inMenuButtons[0], (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 311))
+    # button 6
+    screen.blit(inMenuButtons[0], (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 371))
+    # button 7
+    screen.blit(inMenuButtons[0], (inScreenButtonX, screen.get_height() - 1.25 * menu.get_height() + 431))
+    # toggle feature
+    if selectedMenuButton == 0:  # resources tab
+        resourcesTog += 1
+        if resourcesTog % 2:
+            resourcesOpened = True
+        else:
+            resourcesOpened = False
+        marketOpened = False
+        automationOpened = False
+    if selectedMenuButton == 1:  # market tab
+        marketTog += 1
+        if marketTog % 2:
+            marketOpened = True
+        else:
+            marketOpened = False
+        resourcesOpened = False
+        automationOpened = False
+    """elif selectedMenuButton == 2:  # automation tab
+        automationOpened += 1
+        if automationOpened % 2:
+            automationOpened = True
+        else:
+            automationOpened = False
+        marketOpened = False
+        resourcesOpened = False"""
+    # graphics
+    if resourcesOpened:
+        screen.blit(inMenuResourcesTextBox, (363, 182))
+        # GOLD
+        textSurface = font.render(str(saveInformation[0]), False, (199, 178, 153))
+        screen.blit(textSurface, (363 + 60, 182 + 3 + 62))
+        # screen.blit(plus, (500, 182 + 3))
+        # screen.blit(minus, (500 + 38, 182 + 3))
+
+        # WHEAT
+        textSurface = font.render(str(saveInformation[1]), False, (199, 178, 153))
+        screen.blit(textSurface, (363 + 74, 182 + 64 + 62))
+        # screen.blit(plus, (500, 182 + 3 + 64 + 62))
+        # screen.blit(minus, (500 + 38, 182 + 3 + 64 + 62))
+
+        # COCOA
+        textSurface = font.render(str(saveInformation[2]), False, (199, 178, 153))
+        screen.blit(textSurface, (363 + 72, 182 + 105 + 62))
+        # screen.blit(plus, (500, 182 + 3 + 105 + 62))
+        # screen.blit(minus, (500 + 38, 182 + 3 + 105 + 62))
+    if marketOpened:
+        screen.blit(inMenuResourcesTextBox, (363, 182))
+        # GOLD
+        textSurface = font.render(str(saveInformation[0]), False, (199, 178, 153))
+        screen.blit(textSurface, (363 + 60, 182 + 3 + 62))
+        # screen.blit(plus, (500, 182 + 3))
+        # screen.blit(minus, (500 + 38, 182 + 3))
+
+        # WHEAT
+        textSurface = font.render(str(saveInformation[1]), False, (199, 178, 153))
+        screen.blit(textSurface, (363 + 74, 182 + 64 + 62))
+        screen.blit(plus, (500, 182 + 3 + 64 + 62))
+        screen.blit(minus, (500 + 38, 182 + 3 + 64 + 62))
+
+        # COCOA
+        textSurface = font.render(str(saveInformation[2]), False, (199, 178, 153))
+        screen.blit(textSurface, (363 + 72, 182 + 105 + 62))
+        screen.blit(plus, (500, 182 + 3 + 105 + 62))
+        screen.blit(minus, (500 + 38, 182 + 3 + 105 + 62))
+    """if automationOpened:
+        screen.blit(inMenuResourcesTextBox, (363, 182))  # inMenuAutomationTextBox
+        # GOLD
+        textSurface = font.render(str(saveInformation[0]), False, (199, 178, 153))
+        screen.blit(textSurface, (363 + 60, 182 + 3 + 62))
+
+        # WHEAT
+        screen.blit(plus, (500, 182 + 3 + 64 + 62))
+        screen.blit(minus, (500 + 38, 182 + 3 + 64 + 62))
+
+        # COCOA
+        screen.blit(plus, (500, 182 + 3 + 105 + 62))
+        screen.blit(minus, (500 + 38, 182 + 3 + 105 + 62))"""
+
+
+def update(dt, screen, tileHitBoxes, buttonHitBoxes, menuButtonHitboxes, inMenuBottomX, mapData, coinCollectSound,
+           buildSound, plantSound, font, screen_height):
+    global goldPlusCoordinates, goldMinusCoordinates, wheatPlusCoordinates, wheatMinusCoordinates, cocoaPlusCoordinates
+    global cocoaMinusCoordinates, selectedButton, selectedTile, selectedMenuButton, buildingToolTog, farmingToolTog
+    global toolActive, menuTog, menuActive, cocoaSeedsTog, wheatSeedsTog, saveInformation, demoTog, cocoaFarmList
+    global wheatFarmList, tileList, automationTog, autoData, srm, display_message, message_start_time, message_position
+    selectedMenuButton = None
+    selectedTile = None
+    __ = dt
+    # need to also make autoData able to be edited negatively after demo is used
+    tileList = []
+    for i, j in itertools.product(range(4), range(8)):
+        land1 = land()
+        tileList.append(land1)
+        land1.farmType = mapData[i][j]
+        if int(autoData[i][j]) == 1:
+            land1.auto = 1
+    for i in range(len(tileList)):
+        tileList[i].tileLocation = i
+        tileList[i].makeNeighbors()
+    for num in range(len(cocoaFarmList)):
+        if cocoaFarmList[num].auto == 1 and cocoaFarmList[num].update == cocoaFullInt:
+            cocoaFarmList[num].rewardUpdate()
+            cocoaFarmList[num].update = 0
+    for num in range(len(wheatFarmList)):
+        if wheatFarmList[num].auto == 1 and wheatFarmList[num].update == wheatFullInt:
+            wheatFarmList[num].rewardUpdate()
+            wheatFarmList[num].update = 0
+    if not srm:
+        """
+        print("tileList: ")
+        for i in range(len(tileList)):
+            print("auto: ", tileList[i].auto, " tileLocation: ", tileList[i].tileLocation)
+        print("cocoaList: ")
+        for i in range(len(cocoaFarmList)):
+            print("auto: ", cocoaFarmList[i].auto, " tileLocation: ", cocoaFarmList[i].tileLocation)
+        print("wheatFarmList: ")
+        for i in range(len(wheatFarmList)):
+            print("auto: ", wheatFarmList[i].auto, " tileLocation: ", wheatFarmList[i].tileLocation)"""
+        srm = True
+
+    """ 
+    Update game. Called once per frame.
+    dt is the amount of time passed since last frame.
+    If you want to have constant apparent movement no matter your frame rate,
+    what you can do is something like
+
+    x += v * dt
+
+    and this will scale your velocity based on time. Extend as necessary."""
+    for event in pygame.event.get():
+        if event.type == QUIT:
+            sys.exit()
+        if event.type == pygame.MOUSEBUTTONUP:
+            saveInformation = f.lineGrabber(root + userName)
+            posX, posY = pygame.mouse.get_pos()
+            selectedMenuButton = None
+            selectedTile = None
+            selectedButton = None
+            # land tiles
+            if tileHitBoxes[0][0] <= posX <= tileHitBoxes[0][0] + 124 and \
+                    tileHitBoxes[0][0] + 124 >= posY >= tileHitBoxes[0][0] and not menuActive and selectedTile != 0:
+                selectedTile = 0
+            elif tileHitBoxes[1][0] <= posX <= tileHitBoxes[1][0] + 124 and \
+                    tileHitBoxes[1][1] + 124 >= posY >= tileHitBoxes[1][1] and not menuActive and selectedTile != 1:
+                selectedTile = 1
+            elif tileHitBoxes[2][0] <= posX <= tileHitBoxes[2][0] + 124 and \
+                    tileHitBoxes[2][1] + 124 >= posY >= tileHitBoxes[2][1] and not menuActive and selectedTile != 2:
+                selectedTile = 2
+            elif tileHitBoxes[3][0] <= posX <= tileHitBoxes[3][0] + 124 and \
+                    tileHitBoxes[3][1] + 124 >= posY >= tileHitBoxes[3][1] and not menuActive and selectedTile != 3:
+                selectedTile = 3
+            elif tileHitBoxes[4][0] <= posX <= tileHitBoxes[4][0] + 124 and \
+                    tileHitBoxes[4][1] + 124 >= posY >= tileHitBoxes[4][1] and not menuActive and selectedTile != 4:
+                selectedTile = 4
+            elif tileHitBoxes[5][0] <= posX <= tileHitBoxes[5][0] + 124 and \
+                    tileHitBoxes[5][1] + 124 >= posY >= tileHitBoxes[5][1] and not menuActive and selectedTile != 5:
+                selectedTile = 5
+            elif tileHitBoxes[6][0] <= posX <= tileHitBoxes[6][0] + 124 and \
+                    tileHitBoxes[6][1] + 124 >= posY >= tileHitBoxes[6][1] and not menuActive and selectedTile != 6:
+                selectedTile = 6
+            elif tileHitBoxes[7][0] <= posX <= tileHitBoxes[7][0] + 124 and \
+                    tileHitBoxes[7][1] + 124 >= posY >= tileHitBoxes[7][1] and not menuActive and selectedTile != 7:
+                selectedTile = 7
+            elif tileHitBoxes[8][0] <= posX <= tileHitBoxes[8][0] + 124 and \
+                    tileHitBoxes[8][1] + 124 >= posY >= tileHitBoxes[8][1] and not menuActive and selectedTile != 8:
+                selectedTile = 8
+            elif tileHitBoxes[9][0] <= posX <= tileHitBoxes[9][0] + 124 and \
+                    tileHitBoxes[9][1] + 124 >= posY >= tileHitBoxes[9][1] and not menuActive and selectedTile != 9:
+                selectedTile = 9
+            elif tileHitBoxes[10][0] <= posX <= tileHitBoxes[10][0] + 124 and \
+                    tileHitBoxes[10][1] + 124 >= posY >= tileHitBoxes[10][1] and not menuActive and selectedTile != 10:
+                selectedTile = 10
+            elif tileHitBoxes[11][0] <= posX <= tileHitBoxes[11][0] + 124 and \
+                    tileHitBoxes[11][1] + 124 >= posY >= tileHitBoxes[11][1] and not menuActive and selectedTile != 11:
+                selectedTile = 11
+            elif tileHitBoxes[12][0] <= posX <= tileHitBoxes[12][0] + 124 and \
+                    tileHitBoxes[12][1] + 124 >= posY >= tileHitBoxes[12][1] and not menuActive and selectedTile != 12:
+                selectedTile = 12
+            elif tileHitBoxes[13][0] <= posX <= tileHitBoxes[13][0] + 124 and \
+                    tileHitBoxes[13][1] + 124 >= posY >= tileHitBoxes[13][1] and not menuActive and selectedTile != 13:
+                selectedTile = 13
+            elif tileHitBoxes[14][0] <= posX <= tileHitBoxes[14][0] + 124 and \
+                    tileHitBoxes[14][1] + 124 >= posY >= tileHitBoxes[14][1] and not menuActive and selectedTile != 14:
+                selectedTile = 14
+            elif tileHitBoxes[15][0] <= posX <= tileHitBoxes[15][0] + 124 and \
+                    tileHitBoxes[15][1] + 124 >= posY >= tileHitBoxes[15][1] and not menuActive and selectedTile != 15:
+                selectedTile = 15
+            elif tileHitBoxes[16][0] <= posX <= tileHitBoxes[16][0] + 124 and \
+                    tileHitBoxes[16][1] + 124 >= posY >= tileHitBoxes[16][1] and not menuActive and selectedTile != 16:
+                selectedTile = 16
+            elif tileHitBoxes[17][0] <= posX <= tileHitBoxes[17][0] + 124 and \
+                    tileHitBoxes[17][1] + 124 >= posY >= tileHitBoxes[17][1] and not menuActive and selectedTile != 17:
+                selectedTile = 17
+            elif tileHitBoxes[18][0] <= posX <= tileHitBoxes[18][0] + 124 and \
+                    tileHitBoxes[18][1] + 124 >= posY >= tileHitBoxes[18][1] and not menuActive and selectedTile != 18:
+                selectedTile = 18
+            elif tileHitBoxes[19][0] <= posX <= tileHitBoxes[19][0] + 124 and \
+                    tileHitBoxes[19][1] + 124 >= posY >= tileHitBoxes[19][1] and not menuActive and selectedTile != 19:
+                selectedTile = 19
+            elif tileHitBoxes[20][0] <= posX <= tileHitBoxes[20][0] + 124 and \
+                    tileHitBoxes[20][1] + 124 >= posY >= tileHitBoxes[20][1] and not menuActive and selectedTile != 20:
+                selectedTile = 20
+            elif tileHitBoxes[21][0] <= posX <= tileHitBoxes[21][0] + 124 and \
+                    tileHitBoxes[21][1] + 124 >= posY >= tileHitBoxes[21][1] and not menuActive and selectedTile != 21:
+                selectedTile = 21
+            elif tileHitBoxes[22][0] <= posX <= tileHitBoxes[22][0] + 124 and \
+                    tileHitBoxes[22][1] + 124 >= posY >= tileHitBoxes[22][1] and not menuActive and selectedTile != 22:
+                selectedTile = 22
+            elif tileHitBoxes[23][0] <= posX <= tileHitBoxes[23][0] + 124 and \
+                    tileHitBoxes[23][1] + 124 >= posY >= tileHitBoxes[23][1] and not menuActive and selectedTile != 23:
+                selectedTile = 23
+            elif tileHitBoxes[24][0] <= posX <= tileHitBoxes[24][0] + 124 and \
+                    tileHitBoxes[24][1] + 124 >= posY >= tileHitBoxes[24][1] and not menuActive and selectedTile != 24:
+                selectedTile = 24
+            elif tileHitBoxes[25][0] <= posX <= tileHitBoxes[25][0] + 124 and \
+                    tileHitBoxes[25][1] + 124 >= posY >= tileHitBoxes[25][1] and not menuActive and selectedTile != 25:
+                selectedTile = 25
+            elif tileHitBoxes[26][0] <= posX <= tileHitBoxes[26][0] + 124 and \
+                    tileHitBoxes[26][1] + 124 >= posY >= tileHitBoxes[26][1] and not menuActive and selectedTile != 26:
+                selectedTile = 26
+            elif tileHitBoxes[27][0] <= posX <= tileHitBoxes[27][0] + 124 and \
+                    tileHitBoxes[27][1] + 124 >= posY >= tileHitBoxes[27][1] and not menuActive and selectedTile != 27:
+                selectedTile = 27
+            elif tileHitBoxes[28][0] <= posX <= tileHitBoxes[28][0] + 124 and \
+                    tileHitBoxes[28][1] + 124 >= posY >= tileHitBoxes[28][1] and not menuActive and selectedTile != 28:
+                selectedTile = 28
+            elif tileHitBoxes[29][0] <= posX <= tileHitBoxes[29][0] + 124 and \
+                    tileHitBoxes[29][1] + 124 >= posY >= tileHitBoxes[29][1] and not menuActive and selectedTile != 29:
+                selectedTile = 29
+            elif tileHitBoxes[30][0] <= posX <= tileHitBoxes[30][0] + 124 and \
+                    tileHitBoxes[30][1] + 124 >= posY >= tileHitBoxes[30][1] and not menuActive and selectedTile != 30:
+                selectedTile = 30
+            elif tileHitBoxes[31][0] <= posX <= tileHitBoxes[31][0] + 124 and \
+                    tileHitBoxes[31][1] + 124 >= posY >= tileHitBoxes[31][1] and not menuActive and selectedTile != 31:
+                selectedTile = 31
+            """for i in range(31):
+                i += 1
+                if tileHitBoxes[i][0] <= posX <= tileHitBoxes[i][0] + 124 and \
+                        tileHitBoxes[i][0] + 124 >= posY >= tileHitBoxes[i][1] and not menuActive and selectedTile != i:
+                    selectedTile = i
+            if tileHitBoxes[0][0] <= posX <= tileHitBoxes[0][0] + 124 and \
+                    tileHitBoxes[0][0] + 124 >= posY >= tileHitBoxes[0][0] and not menuActive and selectedTile != 0:
+                selectedTile = 0"""
+            wheatGoldCost = 15
+            wheatCocoaCost = 5
+            wheatSellPrice = 5
+            cocoaSellPrice = 3
+            # Tool buttons
+            if buttonHitBoxes[0][0] <= posX <= buttonHitBoxes[0][0] + 124 and \
+                    buttonHitBoxes[0][1] + 83 >= posY >= buttonHitBoxes[0][1] and \
+                    not menuActive and selectedButton != 0:
+                toolActive = "farming" if farmingToolTog % 2 else None
+                selectedButton, farmingToolTog = 0, farmingToolTog + 1
+            elif buttonHitBoxes[1][0] <= posX <= buttonHitBoxes[1][0] + 124 and \
+                    buttonHitBoxes[1][1] + 83 >= posY >= buttonHitBoxes[1][1] and \
+                    not menuActive and selectedButton != 1:
+                toolActive = "building" if buildingToolTog % 2 else None
+                selectedButton, buildingToolTog = 1, buildingToolTog + 1
+            elif buttonHitBoxes[2][0] <= posX <= buttonHitBoxes[2][0] + 124 and \
+                    buttonHitBoxes[2][1] + 83 >= posY >= buttonHitBoxes[2][1] and \
+                    not menuActive and selectedButton != 2:
+                toolActive = "demo" if demoTog % 2 else None
+                selectedButton, demoTog = 2, demoTog + 1
+            elif buttonHitBoxes[3][0] <= posX <= buttonHitBoxes[3][0] + 124 and \
+                    buttonHitBoxes[3][1] + 83 >= posY >= buttonHitBoxes[3][1] and \
+                    not menuActive and selectedButton != 3:
+                toolActive = "automation" if automationTog % 2 else None
+                selectedButton, automationTog = 3, automationTog + 1
+            elif buttonHitBoxes[4][0] <= posX <= buttonHitBoxes[4][0] + 124 and \
+                    buttonHitBoxes[4][1] + 83 >= posY >= buttonHitBoxes[4][1] and \
+                    not menuActive and selectedButton != 4:
+                selectedButton = 4
+            elif buttonHitBoxes[5][0] <= posX <= buttonHitBoxes[5][0] + 124 and \
+                    buttonHitBoxes[5][1] + 83 >= posY >= buttonHitBoxes[5][1] and \
+                    not menuActive and selectedButton != 5:
+                selectedButton = 5
+            elif buttonHitBoxes[6][0] <= posX <= buttonHitBoxes[6][0] + 124 and \
+                    buttonHitBoxes[6][1] + 83 >= posY >= buttonHitBoxes[6][1] and \
+                    not menuActive and selectedButton != 6:
+                selectedButton = 6
+            elif buttonHitBoxes[7][0] <= posX <= buttonHitBoxes[7][0] + 124 and \
+                    buttonHitBoxes[7][1] + 83 >= posY >= buttonHitBoxes[7][1] and \
+                    not menuActive and selectedButton != 7:
+                selectedButton = 7
+            elif buttonHitBoxes[8][0] <= posX <= buttonHitBoxes[8][0] + 124 and \
+                    buttonHitBoxes[8][1] + 83 >= posY >= buttonHitBoxes[8][1] and \
+                    not menuActive and selectedButton != 8:
+                toolActive = "cocoaSeeds" if cocoaSeedsTog % 2 else None
+                selectedButton, cocoaSeedsTog = 8, cocoaSeedsTog + 1
+            elif buttonHitBoxes[9][0] <= posX <= buttonHitBoxes[9][0] + 124 and \
+                    buttonHitBoxes[9][1] + 83 >= posY >= buttonHitBoxes[9][1] and \
+                    not menuActive and selectedButton != 9:
+                toolActive = "wheatSeeds" if wheatSeedsTog % 2 else None
+                selectedButton, wheatSeedsTog = 9, wheatSeedsTog + 1
+            elif buttonHitBoxes[10][0] <= posX <= buttonHitBoxes[10][0] + 124 and \
+                    buttonHitBoxes[10][1] + 83 >= posY >= buttonHitBoxes[10][1] and \
+                    not menuActive and selectedButton != 10:
+                selectedButton = 10
+            elif buttonHitBoxes[11][0] <= posX <= buttonHitBoxes[11][0] + 124 and \
+                    buttonHitBoxes[11][1] + 83 >= posY >= buttonHitBoxes[11][1] and \
+                    not menuActive and selectedButton != 11:
+                selectedButton = 11
+            elif buttonHitBoxes[12][0] <= posX <= buttonHitBoxes[12][0] + 124 and \
+                    buttonHitBoxes[12][1] + 83 >= posY >= buttonHitBoxes[12][1] and \
+                    not menuActive and selectedButton != 12:
+                selectedButton = 12
+            elif buttonHitBoxes[13][0] <= posX <= buttonHitBoxes[13][0] + 124 and \
+                    buttonHitBoxes[13][1] + 83 >= posY >= buttonHitBoxes[13][1] and \
+                    not menuActive and selectedButton != 13:
+                selectedButton = 13
+            elif buttonHitBoxes[14][0] <= posX <= buttonHitBoxes[14][0] + 124 and \
+                    buttonHitBoxes[14][1] + 83 >= posY >= buttonHitBoxes[14][1] and \
+                    not menuActive and selectedButton \
+                    != 14:
+                selectedButton = 14
+            elif buttonHitBoxes[15][0] <= posX <= buttonHitBoxes[15][0] + 124 and \
+                    buttonHitBoxes[15][1] + 83 >= posY >= buttonHitBoxes[15][1]:  # menu button
+                menuActive = False if menuTog % 2 else True
+                selectedButton, menuTog = 15, menuTog + 1
+                # menu buttons
+            elif inMenuBottomX <= posX <= inMenuBottomX + 124 and \
+                 menuButtonHitboxes[0][1] + 38 >= posY >= menuButtonHitboxes[0][1] and selectedMenuButton != 0:
+                selectedMenuButton = 0
+            elif inMenuBottomX <= posX <= inMenuBottomX + 124 and \
+                    menuButtonHitboxes[1][1] + 38 >= posY >= menuButtonHitboxes[1][1] and selectedMenuButton != 1:
+                selectedMenuButton = 1
+            elif inMenuBottomX <= posX <= inMenuBottomX + 124 and \
+                    menuButtonHitboxes[2][1] + 38 >= posY >= menuButtonHitboxes[2][1] and selectedMenuButton != 2:
+                selectedMenuButton = 2
+            elif inMenuBottomX <= posX <= inMenuBottomX + 124 and \
+                    menuButtonHitboxes[3][1] + 38 >= posY >= menuButtonHitboxes[3][1] and selectedMenuButton != 3:
+                selectedMenuButton = 3
+            elif inMenuBottomX <= posX <= inMenuBottomX + 124 and \
+                    menuButtonHitboxes[4][1] + 38 >= posY >= menuButtonHitboxes[4][1] and selectedMenuButton != 4:
+                selectedMenuButton = 4
+            elif inMenuBottomX <= posX <= inMenuBottomX + 124 and \
+                    menuButtonHitboxes[5][1] + 38 >= posY >= menuButtonHitboxes[5][1] and selectedMenuButton != 5:
+                selectedMenuButton = 5
+            elif inMenuBottomX <= posX <= inMenuBottomX + 124 and \
+                    menuButtonHitboxes[6][1] + 38 >= posY >= menuButtonHitboxes[6][1] and selectedMenuButton != 6:
+                selectedMenuButton = 6
+            elif menuActive and (posX < 180 or posX > 900) or (posY < 120 or posY > 600):
+                menuActive = False
+            # this can be used if we want the player to be able to buy wheat from the resources menu
+            elif menuActive and wheatPlusCoordinates[0] <= posX <= (wheatPlusCoordinates[0] + 25) and \
+                    wheatPlusCoordinates[1] <= posY <= (wheatPlusCoordinates[1] + 15):
+                if int(saveInformation[0]) >= wheatGoldCost and \
+                        int(saveInformation[2]) >= wheatCocoaCost:
+                    saveInformation[0] = int(saveInformation[0]) - wheatGoldCost  # gold
+                    saveInformation[1] = int(saveInformation[1]) + 1  # wheat
+                    saveInformation[2] = int(saveInformation[2]) - wheatCocoaCost  # cocoa
+                    pygame.mixer.Sound.play(coinCollectSound)
+            if menuActive and wheatMinusCoordinates[0] <= posX <= (wheatMinusCoordinates[0] + 25) and \
+                    wheatMinusCoordinates[1] <= posY <= (wheatMinusCoordinates[1] + 15) and \
+                    int(saveInformation[1]) >= 1 and marketOpened:
+                saveInformation[1], saveInformation[0] = int(saveInformation[1]) - 1, \
+                                                         int(saveInformation[0]) + wheatSellPrice
+                pygame.mixer.Sound.play(coinCollectSound)
+            # this can be used if we want the player to be able to buy cocoa from the resources menu
+            # need to find a way to reuse this but in the market menu
+            if menuActive and cocoaMinusCoordinates[0] <= posX <= (cocoaMinusCoordinates[0] + 25) and \
+                    cocoaMinusCoordinates[1] <= posY <= (cocoaMinusCoordinates[1] + 15) and \
+                    int(saveInformation[2]) >= 1 and marketOpened:
+                saveInformation[2], saveInformation[0] = int(saveInformation[2]) - 1, \
+                                                         int(saveInformation[0]) + cocoaSellPrice
+                pygame.mixer.Sound.play(coinCollectSound)
+            # harvest a cocoa crop
+            for num in range(len(cocoaFarmList)):
+                if cocoaFarmList[num].tileLocation == selectedTile \
+                        and toolActive == "farming" and cocoaFarmList[num].update == cocoaFullInt:
+                    cocoaFarmList[num].rewardUpdate()
+                    cocoaFarmList[num].update = 0
+            # harvest a wheat crop
+            for num in range(len(wheatFarmList)):
+                if wheatFarmList[num].tileLocation == selectedTile \
+                        and toolActive == "farming" and wheatFarmList[num].update == wheatFullInt:
+                    wheatFarmList[num].rewardUpdate()
+                    wheatFarmList[num].update = 0
+            # assesses land neighbors to see what land can be unlocked
+            totalNeighbors = []
+            for i in range(len(tileList)):
+                if int(tileList[i].farmType) > 0:
+                    for j in range(4):
+                        totalNeighbors.append(tileList[i].neighbors[j])
+            unlockLandUpgrade = 50  # upgrade from locked land to unlocked land
+            establishLandUpgrade = 100  # upgrade from unlocked land to established land
+            cocoaFarmUpgradeGoldCost = 100  # gold cost to build a cocoa farm
+            cocoaFarmUpgradeCocoaCost = 15  # cocoa cost to build a cocoa farm
+            wheatFarmUpgradeGoldCost = 300  # gold cost to build a wheat farm
+            wheatFarmUpgradeWheatCost = 15  # cocoa cost to build a wheat farm
+            """these are not balanced"""
+            automationCocoaFarmGoldCost = 750  # gold cost to automate a cocoa farm
+            automationCocoaFarmCocoaCost = 250  # cocoa cost to automate a cocoa farm
+            automationWheatFarmGoldCost = 300  # gold cost to automate a wheat farm
+            automationWheatFarmWheatCost = 100  # wheat cost to automate a wheat farm
+            for num, onum in itertools.product(range(4), range(8)):
+                if (num * 8 + onum) == selectedTile:
+                    # unlock land with 15 gold
+                    if toolActive == "building" and selectedTile in totalNeighbors:
+                        if int(mapData[num][onum]) == 0:
+                            if int(saveInformation[0]) >= unlockLandUpgrade:
+                                temp_mapData = mapData[num]  # temp_mapData is a string. the row of the selected tile
+                                # replaces locked land (0) with unlocked land (1)
+                                temp_mapData = temp_mapData[:onum] + "1" + temp_mapData[1 + onum:]
+                                mapData[num], tileList[selectedTile].farmType, saveInformation[0] = \
+                                    temp_mapData, "1", int(saveInformation[0]) - unlockLandUpgrade
+                                pygame.mixer.Sound.play(buildSound[random.randrange(4)])
+                        elif int(mapData[num][onum]) == 1:
+                            if int(saveInformation[0]) >= establishLandUpgrade:
+                                temp_mapData = mapData[num]  # temp_mapData is a string. the row of the selected tile
+                                # replaces unlocked land (1) with established land (2)
+                                temp_mapData = temp_mapData[:onum] + "2" + temp_mapData[1 + onum:]
+                                mapData[num], tileList[selectedTile].farmType, saveInformation[0] = \
+                                    temp_mapData, "2", int(saveInformation[0]) - establishLandUpgrade
+                                pygame.mixer.Sound.play(buildSound[random.randrange(4)])
+                    elif toolActive == "cocoaSeeds":
+                        if int(mapData[num][onum]) == 2 and int(saveInformation[0]) >= cocoaFarmUpgradeGoldCost and \
+                                int(saveInformation[2]) >= cocoaFarmUpgradeCocoaCost:
+                            temp_mapData = mapData[num]
+                            # replaces established land (2) with a cocoa farm
+                            temp_mapData = temp_mapData[:onum] + "3" + temp_mapData[1 + onum:]
+                            mapData[num], cocoaFarm, cocoaFarm.farmType, cocoaFarm.location, cocoaFarm.tileLocation, \
+                                saveInformation[0], saveInformation[2] = \
+                                temp_mapData, farm(), 3, (num, onum), selectedTile, int(saveInformation[0]) - \
+                                cocoaFarmUpgradeGoldCost, int(saveInformation[2]) - cocoaFarmUpgradeCocoaCost
+                            cocoaFarmList.append(cocoaFarm)
+                            pygame.mixer.Sound.play(plantSound[random.randrange(3)])
+                    elif toolActive == "wheatSeeds":
+                        if int(mapData[num][onum]) == 2 and int(saveInformation[0]) >= wheatFarmUpgradeGoldCost and \
+                                                            int(saveInformation[1]) >= wheatFarmUpgradeWheatCost:
+                            temp_mapData = mapData[num]
+                            # replaces established land (2) with a wheat farm
+                            temp_mapData = temp_mapData[:onum] + "4" + temp_mapData[1 + onum:]
+                            mapData[num], wheatFarm, wheatFarm.farmType, wheatFarm.location, wheatFarm.tileLocation, \
+                                saveInformation[0], saveInformation[2] = \
+                                temp_mapData, farm(), 4, (num, onum), selectedTile, int(saveInformation[0]) - 15, \
+                                int(saveInformation[1]) - 5
+                            wheatFarmList.append(wheatFarm)
+                            pygame.mixer.Sound.play(plantSound[random.randrange(3)])
+                    #newfarm
+                        # need to add toolActive == "__Seeds" for each new crop
+                    # rips out a farm and replaces it with unlocked land, removes it from respective list.
+                        # only established for cocoa and wheat farms
+                            #newfarm
+                    elif toolActive == "demo":
+                        if int(mapData[num][onum]) == 4:
+                            temp_mapData = mapData[num]
+                            temp_mapData = temp_mapData[:onum] + "1" + temp_mapData[1 + onum:]
+                            tempList, mapData[num] = [], temp_mapData
+                            for i in range(len(wheatFarmList)):
+                                if wheatFarmList[i].tileLocation == selectedTile:
+                                    tempList.append(i)
+                            for j in range(len(tempList)):
+                                wheatFarmList.pop(tempList[j])
+                                # sound effect wouldn't hurt here
+                        if int(mapData[num][onum]) == 3:
+                            temp_mapData = mapData[num]
+                            temp_mapData = temp_mapData[:onum] + "1" + temp_mapData[1 + onum:]
+                            tempList, mapData[num] = [], temp_mapData
+                            for i in range(len(cocoaFarmList)):
+                                if cocoaFarmList[i].tileLocation == selectedTile:
+                                    tempList.append(i)
+                            for k in range(len(tempList)):
+                                cocoaFarmList.pop(tempList[k])
+                                # sound effect wouldn't hurt here
+                    elif toolActive == "automation":
+                        # cocoa
+                        if int(mapData[num][onum]) == 3 and int(saveInformation[0]) >= automationCocoaFarmGoldCost and \
+                                int(saveInformation[2]) >= automationCocoaFarmCocoaCost:
+                            saveInformation[0], saveInformation[2] = \
+                                int(saveInformation[0]) - automationCocoaFarmGoldCost, \
+                                int(saveInformation[2]) - automationCocoaFarmCocoaCost
+                            for i in range(len(cocoaFarmList)):
+                                if cocoaFarmList[i].tileLocation == selectedTile:
+                                    cocoaFarmList[i].auto = 1
+                        elif int(mapData[num][onum]) == 3 and int(saveInformation[0]) <= automationCocoaFarmGoldCost or \
+                                int(saveInformation[2]) <= automationCocoaFarmCocoaCost:
+                                    display_message = f"Not enough resources to automate cocoa farm! Need " \
+                                              f"{automationCocoaFarmGoldCost} gold and " \
+                                              f"{automationCocoaFarmCocoaCost} cocoa."
+                                    message_start_time = time.time()
+                                    message_position = pygame.mouse.get_pos()  # Capture the mouse position
+                        # wheat
+                        if int(mapData[num][onum]) == 4 and int(saveInformation[0]) >= automationWheatFarmGoldCost \
+                                and int(saveInformation[1]) >= automationWheatFarmWheatCost:
+                            saveInformation[0], saveInformation[1] = \
+                                int(saveInformation[0]) - automationWheatFarmGoldCost, \
+                                int(saveInformation[1]) - automationWheatFarmWheatCost
+                            for i in range(len(wheatFarmList)):
+                                if wheatFarmList[i].tileLocation == selectedTile:
+                                    wheatFarmList[i].auto = 1
+                        elif int(mapData[num][onum]) == 4 and int(saveInformation[0]) <= automationWheatFarmGoldCost or \
+                                int(saveInformation[1]) <= automationWheatFarmWheatCost:
+                                    display_message = f"Not enough resources to automate wheat farm! Need " \
+                                              f"{automationWheatFarmGoldCost} gold and " \
+                                              f"{automationWheatFarmWheatCost} wheat."
+                                    message_start_time = time.time()
+                                    message_position = pygame.mouse.get_pos()  # Capture the mouse position
+            for i in range(8):
+                saveInformation.pop(4)
+            for i in range(4):
+                saveInformation.append(mapData[i])
+            for i in range(4):
+                saveInformation.append(autoData[i])
+            f.lineUpdater(root + userName, saveInformation)
+
+
+def draw(screen, font, buttonData, HUD, menu, inMenuResourcesTextBox, tilePositions, tileYPositions, tileTypes,
+         buttonPositions, buttonYPositions, buttonTypes, iconTypes, iconPos, inScreenButtonX, progressBarTypes,
+         inMenuButtons, inMenuBazaarTextBox, plus, minus, mapData, wheatStages, cocoaStages):
+    global cocoaFullInt, wheatFullInt, wheatFarmList, cocoaFarmList, cocoaEmpty, tempShapeToggler, tileList, autoData
+    global display_message, message_start_time, message_position
+    # Drawing data from map
+    xCounter, yCounter = 0, 0
+    for row in mapData:
+        for column in range(len(row)):
+            # iterates through tile positions list to find location to draw tile
+            tempX = tilePositions[xCounter]
+            tempY = tileYPositions[yCounter]
+            xCounter += 1
+            yCounter += 1
+            # draws tile
+            column = int(column)
+            rc = int(row[column])
+            screen.blit(tileTypes[rc], (tempX, tempY))
+    xCounter, yCounter, counter = 0, 0, 0
+    buttonData[0][0] = 4 if toolActive == "farming" else 2
+    buttonData[0][1] = 5 if toolActive == "building" else 3
+    buttonData[0][2] = 11 if toolActive == "demo" else 10
+    buttonData[0][3] = 13 if toolActive == "automation" else 12
+    buttonData[1][0] = 9 if toolActive == "cocoaSeeds" else 8
+    buttonData[1][1] = 7 if toolActive == "wheatSeeds" else 6
+
+    """
+    buttonTypes = [buttonBackgroundReleased,
+     1 menuButton,  2 harvestButton,  3 buildButton,  4 harvestButtonToggled,  5 buildButtonToggled,  6 wheatButton, 
+     7 wheatButtonToggled,  8 cocoaButton,   9 cocoaButtonToggled,  10 shovelButton, 11  shovelButtonToggled]
+                   """
+    for row in buttonData:
+        for column in range(len(row)):
+            counter += 1
+            # iterates through button positions list to find location to draw button
+            tempX, tempY, xCounter, yCounter, counter, tempShape = \
+                buttonPositions[xCounter], buttonYPositions[yCounter], \
+                xCounter + 1, yCounter + 1, counter + 1, buttonTypes[row[column]]
+            # draws tile
+            screen.blit(tempShape, (tempX, tempY))
+    for i in range(len(cocoaFarmList)):
+        cocoaFarmList[i].upgrade()
+        cocoaFarmList[i].displayFarm(screen, iconTypes, iconPos, progressBarTypes, wheatStages, cocoaStages)
+    for i in range(len(wheatFarmList)):
+        wheatFarmList[i].upgrade()
+        wheatFarmList[i].displayFarm(screen, iconTypes, iconPos, progressBarTypes, wheatStages, cocoaStages)
+
+    # HUD
+    screen.blit(HUD, (0, 0))
+    if display_message and time.time() - message_start_time < message_duration:
+        text_surface = font.render(display_message, True, RED)
+        screen.blit(text_surface, (50, screen.get_height() // 2))
+    elif time.time() - message_start_time >= message_duration:
+        display_message = None  # Clear the message after the duration
+
+    # In game menu
+    if menuActive:
+        menuDisplay(screen, font, menu, inMenuButtons, inScreenButtonX, inMenuResourcesTextBox, inMenuBazaarTextBox,
+                    plus, minus)
+
+    # Flip the display so that the things we drew actually show up.
+    pygame.display.flip()
+
+
+def runPyGame():
+    global autoData, saveInformation, tileList
+    """
+    possible makeover
+
+    tiles = {
+        '0': 'dirt',
+        '1': 'grass'
+    }
+    line1 = '10000000'
+    for tile in line1: print(tiles[tile], end=' ')
+    """
+    # Initialise PyGame.
+
+    pygame.init()
+    pygame.mixer.init()
+
+    # Set up the window.
+    width, height = 1080, 720
+    screen = pygame.display.set_mode((width, height))
+
+
+    # Set up the games title
+    pygame.display.set_caption("Chocolate Tycoon")
+    font = pygame.font.Font(None, 36)
+
+    # Getting map data
+    saveInformation, mapData, autoData = f.lineGrabber(root + userName), [], []
+    for i in range(len(saveInformation) - 8):
+        mapData_list = str(saveInformation[i + 4])
+        mapData.append(mapData_list)
+        autoData_list = str(saveInformation[i + 8])
+        autoData.append(autoData_list)
+
+    tileList = []
+    for i, j in itertools.product(range(4), range(8)):
+        land1 = land()
+        tileList.append(land1)
+        land1.farmType = mapData[i][j]
+        if int(autoData[i][j]) == 1:
+            land1.auto = 1
+    for i in range(len(tileList)):
+        tileList[i].tileLocation = i
+        tileList[i].makeNeighbors()
+
+    # FARMS
+    farmList = []
+
+    # Cocoa and wheat farms
+    marching, marching2 = 0, 0
+    for i in range(4):  # column
+        for j in range(8):  # row
+            if mapData[i][j] == "3":  # if the tile is a cocoa farm (position 3 in the tileTypes list)
+                cocoaFarmList.append(farm())
+                cocoaFarmList[marching].farmType, cocoaFarmList[marching].location, cocoaFarmList[marching]. \
+                    tileLocation, cocoaFarmList[marching].auto, marching = 3, (i, j), i * 8 + j, int(autoData[i][j]), \
+                                                                           marching + 1
+            if mapData[i][j] == "4":  # if the tile is a wheat farm (position 4 in the tileTypes list)
+                wheatFarmList.append(farm())
+                wheatFarmList[marching2].farmType, wheatFarmList[marching2].location, wheatFarmList[marching2]. \
+                    tileLocation, wheatFarmList[marching2].auto, marching2 = \
+                    4, (i, j), i * 8 + j, int(autoData[i][j]), marching2 + 1
+
+    farmList.append(cocoaFarmList)
+    farmList.append(wheatFarmList)
+    # All farms master list
+    individualFarmList = []
+    for num in range(len(farmList)):
+        for onum in range(len(farmList[num])):
+            individualFarmList.append(farmList[num][onum])
+
+    # Getting button data
+    buttonData, file2 = [], open('graphics/buttondata.txt')
+    for row in file2.read().split("\n"):
+        other_list = []
+        for column in row:
+            other_list.append(int(column))
+        buttonData.append(other_list)
+    file2.close()
+
+    # Text
+    font = pygame.font.SysFont("Acumin-Variable-Concept.ttf", 20)
+
+    # Graphics loading
+    HUD = pygame.transform.scale(pygame.image.load("graphics/Map Final.png"), (screen.get_width(), screen.get_height()))
+    menu = pygame.transform.scale(pygame.image.load("graphics/Menu.png"),  # Size = 720x480 | Pos = 180 120
+                                  (screen.get_width() / 1.5, screen.get_height() / 1.5))
+
+    # tiles
+    lockedLand = pygame.transform.scale(pygame.image.load("graphics/LockedLand.png"), (126, 126))
+    unlockedLand = pygame.transform.scale(pygame.image.load("graphics/UnlockedLand.png"), (126, 126))
+    establishedLand = pygame.transform.scale(pygame.image.load("graphics/EstablishedLand.png"), (126, 126))
+    wheatStages = [pygame.transform.scale(pygame.image.load("graphics/wheat_farm_ungrown_NEW.PNG"), (126, 126)),
+                    pygame.transform.scale(pygame.image.load("graphics/wheat_farm_grown_new.PNG"), (126, 126)),
+                    pygame.transform.scale(pygame.image.load("graphics/wheat_farm_grown_more_NEW.PNG"), (126, 126))]
+    cocoaStages = [pygame.transform.scale(pygame.image.load("graphics/cocoa_farm_stage1.PNG"), (126, 126)),
+                    pygame.transform.scale(pygame.image.load("graphics/cocoa_farm_stage2.PNG"), (126, 126)),
+                    pygame.transform.scale(pygame.image.load("graphics/cocoa_farm_stage3.PNG"), (126, 126))]
+    wheatFarm = pygame.transform.scale(pygame.image.load("graphics/wheat_farm_ungrown_NEW.PNG"), (126, 126))
+    cocoaFarm = pygame.transform.scale(pygame.image.load("graphics/CocoaFarm.png"), (126, 126))
+    # wheatFarm = pygame.transform.scale(pygame.image.load("graphics/wheat farm 1.PNG"), (126, 126))
+
+    # buttons
+    menuButton = pygame.transform.scale(pygame.image.load("graphics/MenuButton.png"), (126, 83))
+    buttonBackgroundReleased = pygame.transform.scale(pygame.image.load("graphics/Button Backgrounds Released.png"),
+                                                      (126, 83))
+    harvestButton = pygame.transform.scale(pygame.image.load("graphics/Farm Tool Button Icon.png"), (126, 83))
+    harvestButtonToggled = pygame.transform.scale(pygame.image.load("graphics/Farm Tool Button Toggled.png"), (126, 83))
+    buildButton = pygame.transform.scale(pygame.image.load("graphics/Building Tool.png"), (126, 83))
+    buildButtonToggled = pygame.transform.scale(pygame.image.load("graphics/Building Tool Toggled.png"), (126, 83))
+    wheatButton = pygame.transform.scale(pygame.image.load("graphics/Wheat Tool.png"), (126, 83))
+    wheatButtonToggled = pygame.transform.scale(pygame.image.load("graphics/Wheat Tool Toggled.png"), (126, 83))
+    cocoaButton = pygame.transform.scale(pygame.image.load("graphics/Cocoa Tool.png"), (126, 83))
+    cocoaButtonToggled = pygame.transform.scale(pygame.image.load("graphics/Cocoa Tool Toggled.png"), (126, 83))
+    shovelButton = pygame.transform.scale(pygame.image.load("graphics/Shovel Tool.png"), (126, 83))
+    shovelButtonToggled = pygame.transform.scale(pygame.image.load("graphics/Shovel Tool Toggled.png"), (126, 83))
+    automationTool = pygame.transform.scale(pygame.image.load("graphics/Automation Tool.png"), (126, 83))
+    automationToolToggled = pygame.transform.scale(pygame.image.load("graphics/Automation Tool Toggled.png"), (126, 83))
+
+    # in menu buttons
+    inMenuButton = pygame.transform.scale(pygame.image.load("graphics/InMenuButton.png"), (124, 38))
+    inMenuButtonMaterials = pygame.transform.scale(pygame.image.load("graphics/MenuTileMaterials.png"), (124, 38))
+    inMenuButtonMaterialsToggled = pygame.transform.scale(pygame.image.load("graphics/MenuTileMaterialsToggled.png"),
+                                                          (124, 38))
+    inMenuButtonBazaar = pygame.transform.scale(pygame.image.load("graphics/MenuTileBazaar.png"), (124, 38))
+    inMenuButtonBazaarToggled = pygame.transform.scale(pygame.image.load("graphics/MenuTileBazaarToggled.png"),
+                                                       (124, 38))
+    inMenuButtonAutomation = pygame.transform.scale(pygame.image.load("graphics/MenuTileAutomation.png"), (124, 38))
+    inMenuButtonAutomationToggled = pygame.transform.scale(pygame.image.load("graphics/MenuTileAutomationToggled.png"),
+                                                           (124, 38))
+    inMenuButtons = [inMenuButton, inMenuButtonMaterials, inMenuButtonMaterialsToggled, inMenuButtonBazaar,
+                     inMenuButtonBazaarToggled, inMenuButtonAutomation, inMenuButtonAutomationToggled]
+
+    # in menu controls
+    plus = pygame.transform.scale(pygame.image.load("graphics/plus.png"), (25, 15))
+    minus = pygame.transform.scale(pygame.image.load("graphics/minus.png"), (25, 15))
+
+    # icons
+    cocoaFarmIcon = pygame.transform.scale(pygame.image.load("graphics/Cocoa Bean.png"), (126, 126))
+    wheatFarmIcon = pygame.transform.scale(pygame.image.load("graphics/wheat.png"), (126, 126))
+
+    # text
+    inMenuResourcesTextBox = pygame.transform.scale(pygame.image.load("graphics/In Menu Resources Text Box.png"),
+                                                    (520, 400))
+    inMenuBazaarTextBox = pygame.transform.scale(pygame.image.load("graphics/In Menu Resources Text Box.png"),
+                                                 (520, 400))
+    # progress bars
+    progressBar0 = pygame.transform.scale(pygame.image.load("graphics/Progress Bar No Mass.png"), (71.5, 7.5))
+    progressBar1 = pygame.transform.scale(pygame.image.load("graphics/Progress Bar One Mass.png"), (71.5, 7.5))
+    progressBar2 = pygame.transform.scale(pygame.image.load("graphics/Progress Bar Two Mass.png"), (71.5, 7.5))
+    progressBarTypes = [progressBar0, progressBar1, progressBar2]
+
+    # Sound bits
+    coinCollectSound = pygame.mixer.Sound("graphics/sound/coincollect.wav")
+    plantSound = [pygame.mixer.Sound("graphics/sound/plant1.ogg"),
+                  pygame.mixer.Sound("graphics/sound/plant2.ogg"),
+                  pygame.mixer.Sound("graphics/sound/plant3.ogg")]
+    buildSound = [pygame.mixer.Sound("graphics/sound/stone1.ogg"), pygame.mixer.Sound("graphics/sound/stone2.ogg"),
+                  pygame.mixer.Sound("graphics/sound/stone3.ogg"), pygame.mixer.Sound("graphics/sound/stone4.ogg")]
+    establishedSound = []  # add sound
+    tearUpSound = []  # add sound
+
+    # Various variables
+    inScreenButtonX = (screen.get_width() - 1.25 * menu.get_width() + 18)
+
+    # Tiles
+    tileTypes = [lockedLand, unlockedLand, establishedLand, cocoaFarm, wheatFarm]
+    tilePositions, tileYPositions = [8, 142, 276, 410, 544, 678, 812, 946,
+                                     8, 142, 276, 410, 544, 678, 812, 946,
+                                     8, 142, 276, 410, 544, 678, 812, 946,
+                                     8, 142, 276, 410, 544, 678, 812, 946], [8, 8, 8, 8, 8, 8, 8, 8,
+                                                                             142, 142, 142, 142, 142, 142, 142, 142,
+                                                                             276, 276, 276, 276, 276, 276, 276, 276,
+                                                                             410, 410, 410, 410, 410, 410, 410, 410]
+
+    # Buttons
+    buttonTypes = [buttonBackgroundReleased, menuButton, harvestButton, buildButton, harvestButtonToggled,
+                   buildButtonToggled, wheatButton, wheatButtonToggled, cocoaButton, cocoaButtonToggled, shovelButton,
+                   shovelButtonToggled, automationTool, automationToolToggled]
+    buttonPositions, buttonYPositions = [8, 142, 276, 410, 544, 678, 812, 946,
+                                         8, 142, 276, 410, 544, 678, 812, 946], [544, 544, 544, 544, 544, 544, 544, 544,
+                                                                                 635, 635, 635, 635, 635, 635, 635, 635]
+    # Icons
+    iconTypes = [None, None, None, cocoaFarmIcon,
+                 wheatFarmIcon]
+    iconPos = [
+        [(8, 8), (142, 8), (276, 8), (410, 8), (544, 8), (678, 8), (812, 8), (946, 8)],
+        [(8, 142), (142, 142), (276, 142), (410, 142), (544, 142), (678, 142), (812, 142), (946, 142)],
+        [(8, 276), (142, 276), (276, 276), (410, 276), (544, 276), (678, 276), (812, 276), (946, 276)],
+        [(8, 410), (142, 410), (276, 410), (410, 410), (544, 410), (678, 410), (812, 410), (946, 410)]
+    ]
+    """iconTypes = {
+        '3': cocoaFarmIcon,
+        '4': wheatFarmIcon
+    }"""
+    menuButtonHitboxes = [
+        [inScreenButtonX,
+         screen.get_height() - 1.25 *
+         menu.get_height() + 71],
+        [inScreenButtonX,
+         screen.get_height() - 1.25 * menu.get_height() + 131],
+        [inScreenButtonX,
+         screen.get_height() - 1.25 * menu.get_height() + 191],
+        [inScreenButtonX,
+         screen.get_height() - 1.25 * menu.get_height() + 251],
+        [inScreenButtonX,
+         screen.get_height() - 1.25 * menu.get_height() + 311],
+        [inScreenButtonX,
+         screen.get_height() - 1.25 * menu.get_height() + 371],
+        [inScreenButtonX,
+         screen.get_height() - 1.25 * menu.get_height() + 431]]
+    buttonHitBoxes = [[8, 536], [142, 536],
+                      [276, 536],
+                      [410, 536], [544, 536],
+                      [678, 536],
+                      [812, 536], [946, 536],
+                      [8, 627], [142, 627],
+                      [276, 627],
+                      [410, 627], [544, 627],
+                      [678, 627],
+                      [812, 627], [946, 627]]
+    tileHitBoxes = [[8, 8], [142, 8], [276, 8], [410, 8],
+                    [544, 8], [678, 8],
+                    [812, 8], [946, 8], [8, 142], [142, 142],
+                    [276, 142],
+                    [410, 142], [544, 142], [678, 142],
+                    [812, 142], [946, 142],
+                    [8, 268], [142, 268], [276, 268],
+                    [410, 268], [544, 268],
+                    [678, 268], [812, 268], [946, 268],
+                    [8, 402], [142, 402],
+                    [276, 402], [410, 402], [544, 402],
+                    [678, 402], [812, 402],
+                    [946, 402]]
+
+    # Set up the clock. This will tick every frame and thus maintain a relatively constant frame rate. Hopefully.
+    fps, fpsClock = 15, pygame.time.Clock()
+
+    # Main game loop.
+    dt = 1 / fps  # dt is the time since last frame.
+
+    while True:  # Loop forever!
+        update(dt, screen, tileHitBoxes, buttonHitBoxes, menuButtonHitboxes, inScreenButtonX, mapData, coinCollectSound,
+               buildSound, plantSound, font, height)
+        draw(screen, font, buttonData, HUD, menu, inMenuResourcesTextBox, tilePositions, tileYPositions, tileTypes,
+             buttonPositions, buttonYPositions, buttonTypes, iconTypes, iconPos, inScreenButtonX, progressBarTypes,
+             inMenuButtons, inMenuBazaarTextBox, plus, minus, mapData, wheatStages, cocoaStages)
+
+        dt = fpsClock.tick(fps)
+
+
+runPyGame()

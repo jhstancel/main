@@ -1,0 +1,10 @@
+Documentation for "A Patch in the Forest" by John Stancel
+Beginning on 12.15.22
+
+12.15.22
+For this game I don't want to overwhelm myself considering when I do that I usually end up getting burnt out and not
+finishing the project. For this sake I am greatly considering making this game a text-based one, not having to overwhelm
+myself with the idea of graphics and the headache coordinates, digital design, and pygame is known for (by me). I am
+going to start today by mainly focusing on researching text based games that...
+
+Text based is stupid though? I have made TB games before, and I am not sure if that is what I want.
