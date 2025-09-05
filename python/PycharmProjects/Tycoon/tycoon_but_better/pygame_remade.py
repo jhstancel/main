@@ -42,10 +42,9 @@ def make_menu_button_rects(inScreenButtonX: int, menuButtonHitboxes: list[list[i
     return [pg.Rect(inScreenButtonX, y, 124, 38) for (_, y) in menuButtonHitboxes]
 
 
-def clicked_outside_menu(pos: tuple[int, int]) -> bool:
-    # matches your old hard-coded menu box (180..900, 120..600)
-    x, y = pos
-    return x < 180 or x > 900 or y < 120 or y > 600
+def clicked_outside_menu(pos: tuple[int, int], menu_rect: pg.Rect) -> bool:
+    return not menu_rect.collidepoint(pos)
+
 
 
 class land:
@@ -102,6 +101,28 @@ class farm(land):
             screen.blit(wheatStages[stage], iconPos[r][c])
 
 
+# --- stacked toast notifications -------------------------------------------
+class Toast:
+    def __init__(self, text: str, kind: str = "info", ttl: float = 2.6):
+        self.text = text
+        self.kind = kind  # "info" | "warn" | "error"
+        self.ttl  = ttl   # seconds to live
+        self.age  = 0.0
+
+    @property
+    def alive(self) -> bool:
+        return self.age < self.ttl
+
+    @property
+    def alpha(self) -> int:
+        # last 0.6s fade out
+        fade = 0.6
+        if self.age <= self.ttl - fade:
+            return 255
+        remain = max(0.0, self.ttl - self.age)
+        return int(255 * (remain / fade))
+
+
 
 class GameApp:
     def __init__(self):
@@ -121,6 +142,7 @@ class GameApp:
         self.menu_img = None
         self.plus = None
         self.minus = None
+        self.menu_rect = pg.Rect(0, 0, 0, 0)  # set real size later in _load_images_and_sounds
         try:
             pg.mixer.init()
         except Exception:
@@ -333,6 +355,7 @@ class GameApp:
         menu_w, menu_h = self.menu_img.get_size()
         x0 = geo_w - int(1.25 * menu_w)
         y0 = geo_h - int(1.25 * menu_h)
+        self.menu_rect = pg.Rect(x0, y0, menu_w, menu_h)  # <- store the real rect
         self.inScreenButtonX = x0 + 18
 
         menuButtonHitboxes = [[self.inScreenButtonX, y0 + off]
@@ -358,11 +381,9 @@ class GameApp:
         self.selectedTile = None  # type: int | None
         self.selectedButton = None  # type: int | None
 
-        # Floating message (errors, tips)
-        self.display_message = None  # type: str | None
-        self.message_start_time = 0.0
-        self.message_duration = 3.0
-        self.message_position = (0, 0)
+        # Toasts (stacked notifications)
+        self.toasts: list[Toast] = []
+        self.max_toasts = 6  # keep the stack tidy
 
         # Toggles (preserve original semantics)
         self.farmingToolTog = 1
@@ -377,10 +398,41 @@ class GameApp:
         self.progressBars = self.progressBarTypes
 
     # ---------- helpers ----------
-    def _flash(self, msg: str) -> None:
-        self.display_message = msg
-        self.message_start_time = time.time()
-        self.message_position = self._mouse_pos()
+    def toast(self, msg: str, kind: str = "info", ttl: float = 2.6) -> None:
+        """Push a stacked toast; newest appears at the bottom and fades out."""
+        self.toasts.append(Toast(msg, kind, ttl))
+        # trim if we exceed the cap
+        if len(self.toasts) > self.max_toasts:
+            self.toasts = self.toasts[-self.max_toasts:]
+
+    def _update_toasts(self, dt: float) -> None:
+        for t in self.toasts:
+            t.age += dt
+        self.toasts = [t for t in self.toasts if t.alive]
+
+    def _draw_toasts(self, canvas: pg.Surface) -> None:
+        # styles per kind
+        styles = {
+            "info": ((30, 30, 35), (230, 230, 230)),  # bg, text
+            "warn": ((60, 45, 8), (255, 230, 150)),
+            "error": ((60, 10, 10), (255, 190, 190)),
+        }
+        pad = 8
+        gap = 6
+        # bottom-left stack
+        x = 12
+        y = canvas.get_height() - 12
+        # newest should appear on the bottom; draw oldest first
+        for t in self.toasts[-self.max_toasts:]:
+            bg_col, fg_col = styles.get(t.kind, styles["info"])
+            text_surf = self.font.render(t.text, True, fg_col)
+            w, h = text_surf.get_size()
+            box = pg.Surface((w + pad * 2, h + pad * 2), pg.SRCALPHA)
+            box.fill((*bg_col, max(70, t.alpha)))  # translucent bg + fade
+            y -= box.get_height()
+            canvas.blit(box, (x, y))
+            canvas.blit(text_surf, (x + pad, y + pad))
+            y -= gap
 
     def _blit_label(self, text: str, pos: tuple[int, int]) -> None:
         surf = self.font.render(str(text), True, (199, 178, 153))
@@ -472,7 +524,7 @@ class GameApp:
             if fm.auto == 1 and fm.update >= 100:
                 fm.rewardUpdate();
                 fm.update = 0
-
+        self._update_toasts(dt)
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 pg.quit();
@@ -496,17 +548,19 @@ class GameApp:
                                 if pg.Rect(x, y, 126, 83).collidepoint(pos)), None)
                     if btn is not None:
                         self.selectedButton = btn
+                        if btn == 15:  # menu button is index 15 (bottom-right)
+                            self._handle_tool_button(btn)
+                            continue  # <<< do NOT process the rest of this click
                         self._handle_tool_button(btn)
 
-                # In-game menu buttons
-                if self.menuActive:
-                    idx = next((i for i, r in enumerate(self.menu_button_rects) if r.collidepoint(pos)), None)
-                    if idx is not None:
-                        self._handle_menu_tab(idx)
-                    else:
-                        # click outside → close
-                        if clicked_outside_menu(pos):
-                            self.menuActive = False
+                    # In-game menu buttons
+                    if self.menuActive:
+                        idx = next((i for i, r in enumerate(self.menu_button_rects) if r.collidepoint(pos)), None)
+                        if idx is not None:
+                            self._handle_menu_tab(idx)
+                        else:
+                            if clicked_outside_menu(pos, self.menu_rect):
+                                self.menuActive = False
 
                     # Bazaar +/- clicks
                     if self.marketOpened:
@@ -625,13 +679,8 @@ class GameApp:
                 canvas.blit(self.plus, self.cocoaPlusRect.topleft)
                 canvas.blit(self.minus, self.cocoaMinusRect.topleft)
 
-        # ---------- 5) FLOATING MESSAGE ----------
-        if self.display_message and (time.time() - self.message_start_time) < self.message_duration:
-            txt = self.font.render(self.display_message, True, (255, 80, 80))
-            mx, my = self.message_position
-            canvas.blit(txt, (mx + 10, my + 10))
-        else:
-            self.display_message = None
+        # Toasts (stacked/fading)
+        self._draw_toasts(canvas)
 
         # ---------- 6) TOOL BUTTONS (draw last, above HUD) ----------
         self._update_button_visuals()
@@ -718,15 +767,18 @@ class GameApp:
                 gold -= wheatGoldCost
                 wheat += 1
                 cocoa -= wheatCocoaCost
-                pg.mixer.Sound.play(self.coinCollectSound)
+                if self.coinCollectSound: self.coinCollectSound.play()
             else:
-                self._flash("Not enough gold/cocoa to buy wheat!")
+                self.toast(f"Need {wheatGoldCost} gold + {wheatCocoaCost} cocoa "
+                           f"(have {gold}g / {cocoa}c) to buy wheat.", kind="error")
+
         # Wheat -
         if self.wheatMinusRect.collidepoint(pos):
             if wheat >= 1:
                 wheat -= 1
                 gold += wheatSellPrice
-                pg.mixer.Sound.play(self.coinCollectSound)
+                if self.coinCollectSound: self.coinCollectSound.play()
+
         # Cocoa +
         if self.cocoaPlusRect.collidepoint(pos):
             # (No cocoa+ purchase specified in your design; omit or add rules here)
@@ -808,7 +860,9 @@ class GameApp:
                 if self.plantSound:  # play sound if mixer/asset loaded
                     pg.mixer.Sound.play(self.plantSound[random.randrange(len(self.plantSound))])
             else:
-                self._flash("Need 100 gold + 15 cocoa and established land.")
+                need_g, need_c = cocoaFarmUpgradeGoldCost, cocoaFarmUpgradeCocoaCost
+                self.toast(f"Plant cocoa: need {need_g} gold + {need_c} cocoa on established land "
+                           f"(have {gold}g / {cocoa}c).", kind="error")
 
         # PLANT WHEAT
         elif self.toolActive == "wheatSeeds":
@@ -827,7 +881,9 @@ class GameApp:
                 if self.plantSound:
                     pg.mixer.Sound.play(self.plantSound[random.randrange(len(self.plantSound))])
             else:
-                self._flash("Need 300 gold + 15 wheat and established land.")
+                need_g, need_w = wheatFarmUpgradeGoldCost, wheatFarmUpgradeWheatCost
+                self.toast(f"Plant wheat: need {need_g} gold + {need_w} wheat on established land "
+                           f"(have {gold}g / {wheat}w).", kind="error")
 
         # HARVEST (also happens on click if using farming tool)
         elif self.toolActive == "farming":
@@ -862,7 +918,9 @@ class GameApp:
                             fm.auto = 1
                     self._set_auto_flag(r, c, 1)
                 else:
-                    self._flash(f"Need {automationCocoaFarmGoldCost} gold + {automationCocoaFarmCocoaCost} cocoa.")
+                    need_g, need_c = automationCocoaFarmGoldCost, automationCocoaFarmCocoaCost
+                    self.toast(f"Automate cocoa: need {need_g} gold + {need_c} cocoa "
+                               f"(have {gold}g / {cocoa}c).", kind="error")
             elif code == 4:  # wheat
                 if gold >= automationWheatFarmGoldCost and wheat >= automationWheatFarmWheatCost:
                     gold -= automationWheatFarmGoldCost
@@ -872,7 +930,9 @@ class GameApp:
                             fm.auto = 1
                     self._set_auto_flag(r, c, 1)
                 else:
-                    self._flash(f"Need {automationWheatFarmGoldCost} gold + {automationWheatFarmWheatCost} wheat.")
+                    need_g, need_w = automationWheatFarmGoldCost, automationWheatFarmWheatCost
+                    self.toast(f"Automate wheat: need {need_g} gold + {need_w} wheat "
+                               f"(have {gold}g / {wheat}w).", kind="error")
 
         # write back updated resources and persist
         self.save[0], self.save[1], self.save[2] = str(gold), str(wheat), str(cocoa)
