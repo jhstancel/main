@@ -1,7 +1,7 @@
 """
 Chocolate Tycoon — pygame_remade.py
 Fully-wired starter that ties together:
-- utils.py (login + save file format you already use)
+- ty_utils.py (login + save file format you already use)
 - assets in ./graphics
 - game loop + scene-ready structure
 This file can stand alone as your entry point.
@@ -13,7 +13,15 @@ import sys
 import time
 import pygame as pg
 from pathlib import Path
-import utils as f  # your existing utils.py
+import random
+import ty_utils as f  # your existing ty_utils.py
+import settings as S
+
+
+ROOT_DIR = Path(__file__).parent
+ASSETS = ROOT_DIR / "assets"
+IMAGES = ASSETS / "images"
+SOUNDS = ASSETS / "sounds"
 
 # ---------- constants ----------
 GRID_ROWS, GRID_COLS = 4, 8
@@ -26,20 +34,103 @@ ROOT_DIR = Path(__file__).parent
 SAVE_DIR = ROOT_DIR / "saveFiles"
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Point utils.py at this save folder (overrides the hardcoded path in utils.py)
+# Point ty_utils.py at this save folder (overrides the hardcoded path in ty_utils.py)
 f.root = str(SAVE_DIR) + os.sep  # e.g. ".../saveFiles/" cross-platform
+
+
+def make_menu_button_rects(inScreenButtonX: int, menuButtonHitboxes: list[list[int]]) -> list[pg.Rect]:
+    return [pg.Rect(inScreenButtonX, y, 124, 38) for (_, y) in menuButtonHitboxes]
+
+
+def clicked_outside_menu(pos: tuple[int, int]) -> bool:
+    # matches your old hard-coded menu box (180..900, 120..600)
+    x, y = pos
+    return x < 180 or x > 900 or y < 120 or y > 600
+
+
+class land:
+    def __init__(self):
+        self.farmType = None
+        self.neighbors = []
+        self.tileLocation = 0
+        self.location = (0, 0)
+        self.update = 0
+        self.reward = 5
+        self.rate = 1
+        self.auto = 0
+
+    def makeNeighbors(self):
+        # 4x8 grid
+        tileIsNotOnTopBorder = self.tileLocation >= 8
+        tileIsNotOnLeftBorder = self.tileLocation not in (0, 8, 16, 24)
+        if tileIsNotOnLeftBorder and tileIsNotOnTopBorder:
+            self.neighbors = [self.tileLocation - 8, self.tileLocation + 1,
+                              self.tileLocation + 8, self.tileLocation - 1]
+        elif not tileIsNotOnTopBorder:
+            self.neighbors = [None, self.tileLocation + 1,
+                              self.tileLocation + 8, self.tileLocation - 1]
+        elif not tileIsNotOnLeftBorder:
+            self.neighbors = [self.tileLocation - 8, self.tileLocation + 1,
+                              self.tileLocation + 8, None]
+
+
+class farm(land):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app  # hold a reference to GameApp (for save + user)
+
+    def upgrade(self):
+        full = 100
+        if self.update < full:
+            self.update = min(self.update + self.rate, full)
+
+    def rewardUpdate(self):
+        # app.save format: [gold, wheat, cocoa, ?, map rows..., auto rows...]
+        if self.farmType in (3, "3"):  # cocoa
+            self.app.save[2] = str(int(self.app.save[2]) + self.reward)
+        elif self.farmType in (4, "4"):  # wheat
+            self.app.save[1] = str(int(self.app.save[1]) + self.reward)
+        # persist using the app's helper (no root/userName globals)
+        self.app._persist_save()
+
+    def displayFarm(self, screen, iconTypes, iconPos, progressBarTypes, wheatStages, cocoaStages):
+        r, c = self.location
+        stage = 0 if self.update < 33 else (1 if self.update < 67 else 2)
+        if self.farmType in (3, "3"):
+            screen.blit(cocoaStages[stage], iconPos[r][c])
+        elif self.farmType in (4, "4"):
+            screen.blit(wheatStages[stage], iconPos[r][c])
+
 
 
 class GameApp:
     def __init__(self):
         # --- init pygame ---
         pg.init()
+        # inside GameApp.__init__ right after you set up screen/clock
+        self.inScreenButtonX = 0
+        self.cocoaFarmList = []
+        self.wheatFarmList = []
+        self.tileTypes = []
+        self.buttonData = [[2, 3, 10, 12, 0, 0, 0, 0], [8, 6, 0, 0, 0, 0, 0, 0]]
+        self.button_positions = []
+        self.button_y_positions = []
+        self.menu_button_rects = []
+        self.tile_positions = []
+        self.tile_rects = []
+        self.menu_img = None
+        self.plus = None
+        self.minus = None
         try:
             pg.mixer.init()
         except Exception:
             pass
-        self.screen = pg.display.set_mode((SCREEN_W, SCREEN_H))
-        pg.display.set_caption("Chocolate Tycoon")
+        self.screen = pg.display.set_mode((S.WINDOW_W, S.WINDOW_H), pg.RESIZABLE)
+        pg.display.set_caption(S.TITLE)
+
+        # Optional logical canvas (lets you keep old 960x540 math and scale to window)
+        self.logical = pg.Surface((S.LOGICAL_W, S.LOGICAL_H), pg.SRCALPHA) if S.SCALE_TO_WINDOW else None
+
         self.clock = pg.time.Clock()
         self.dt = 0.0
 
@@ -70,11 +161,20 @@ class GameApp:
 
     # ---------- helpers ----------
     def _img(self, rel: str, size: tuple[int, int] | None = None) -> pg.Surface:
-        surf = pg.image.load(str(ROOT_DIR / "graphics" / rel)).convert_alpha()
+        surf = pg.image.load(str(IMAGES / rel)).convert_alpha()
         return pg.transform.scale(surf, size) if size else surf
 
-    def _sfx(self, rel: str) -> pg.mixer.Sound:
-        return pg.mixer.Sound(str(ROOT_DIR / "graphics" / rel))
+    def _sfx(self, rel: str) -> pg.mixer.Sound | None:
+        """Load from assets/sounds. Accepts strings that accidentally start with 'sound/'."""
+        rel = rel.replace("\\", "/")
+        if rel.startswith("sound/"):
+            rel = rel[6:]  # strip leading 'sound/'
+        path = SOUNDS / rel
+        try:
+            return pg.mixer.Sound(str(path))
+        except Exception as e:
+            print(f"[audio] couldn't load {path}: {e}")
+            return None
 
     def _grid_positions(self, rows: int, cols: int, start=(0, 0), step=(0, 0)) -> list[tuple[int, int]]:
         sx, sy = start
@@ -82,10 +182,15 @@ class GameApp:
         return [(sx + c * dx, sy + r * dy) for r in range(rows) for c in range(cols)]
 
     def _load_images_and_sounds(self) -> None:
-        self.HUD = self._img("Map Final.png", (SCREEN_W, SCREEN_H))
+        # Use the current window size for HUD/menu scaling
+        geo_w, geo_h = (self.logical.get_size() if getattr(self, "logical", None) else self.screen.get_size())
+
+        # --- images (tiles, HUD, menu, icons) ---
+        self.HUD = self._img("Map Final.png", (geo_w, geo_h))
         self.lockedLand = self._img("LockedLand.png", (TILE_W, TILE_H))
         self.unlockedLand = self._img("UnlockedLand.png", (TILE_W, TILE_H))
         self.establishedLand = self._img("EstablishedLand.png", (TILE_W, TILE_H))
+
         self.wheatStages = [
             self._img("wheat_farm_ungrown_NEW.PNG", (TILE_W, TILE_H)),
             self._img("wheat_farm_grown_new.PNG", (TILE_W, TILE_H)),
@@ -96,8 +201,11 @@ class GameApp:
             self._img("cocoa_farm_stage2.PNG", (TILE_W, TILE_H)),
             self._img("cocoa_farm_stage3.PNG", (TILE_W, TILE_H)),
         ]
-        self.menu_img = self._img("Menu.png", (int(SCREEN_W/1.5), int(SCREEN_H/1.5)))
-        self.plus, self.minus = self._img("plus.png", (25, 15)), self._img("minus.png", (25, 15))
+
+        self.menu_img = self._img("Menu.png", (int(geo_w / 1.5), int(geo_h / 1.5)))
+        self.plus = self._img("plus.png", (25, 15))
+        self.minus = self._img("minus.png", (25, 15))
+
         self.inMenuButton = self._img("InMenuButton.png", (124, 38))
         self.inMenuButtonMaterials = self._img("MenuTileMaterials.png", (124, 38))
         self.inMenuButtonMaterialsToggled = self._img("MenuTileMaterialsToggled.png", (124, 38))
@@ -106,12 +214,13 @@ class GameApp:
         self.inMenuButtonAutomation = self._img("MenuTileAutomation.png", (124, 38))
         self.inMenuButtonAutomationToggled = self._img("MenuTileAutomationToggled.png", (124, 38))
         self.inMenuButtons = [
-            self.inMenuButton, self.inMenuButtonMaterials, self.inMenuButtonMaterialsToggled,
+            self.inMenuButton,
+            self.inMenuButtonMaterials, self.inMenuButtonMaterialsToggled,
             self.inMenuButtonBazaar, self.inMenuButtonBazaarToggled,
             self.inMenuButtonAutomation, self.inMenuButtonAutomationToggled
         ]
 
-        # Icons
+        # Icons (used by farm display)
         self.cocoaFarmIcon = self._img("Cocoa Bean.png", (126, 126))
         self.wheatFarmIcon = self._img("wheat.png", (126, 126))
         self.iconTypes = [None, None, None, self.cocoaFarmIcon, self.wheatFarmIcon]
@@ -133,27 +242,60 @@ class GameApp:
         self.progressBar2 = self._img("Progress Bar Two Mass.png", (71, 8))
         self.progressBarTypes = [self.progressBar0, self.progressBar1, self.progressBar2]
 
-        # Sounds
-        self.coinCollectSound = self._sfx("sound/coincollect.wav")
-        self.plantSound = [
-            self._sfx("sound/plant1.ogg"),
-            self._sfx("sound/plant2.ogg"),
-            self._sfx("sound/plant3.ogg")
-        ]
-        self.buildSound = [
-            self._sfx("sound/stone1.ogg"),
-            self._sfx("sound/stone2.ogg"),
-            self._sfx("sound/stone3.ogg"),
-            self._sfx("sound/stone4.ogg")
-        ]
+        # --- sounds (no "sound/" prefix; guard against missing audio) ---
+        try:
+            if not pg.mixer.get_init():
+                pg.mixer.init()
+        except Exception:
+            # Audio is optional; continue without mixer
+            pass
 
-        # Button data (from file)
-        self.buttonData = []
-        with open(ROOT_DIR / "graphics" / "buttondata.txt") as fh:
-            for row in fh.read().splitlines():
-                self.buttonData.append([int(c) for c in row])
+        # _sfx() should already normalize & return None on failure; still guard at play time.
+        # Sounds (guard mixer init; load bare filenames; filter out Nones)
+        try:
+            if not pg.mixer.get_init():
+                pg.mixer.init()
+        except Exception:
+            pass
 
-        # Button images
+        self.coinCollectSound = self._sfx("coincollect.wav")
+        self.plantSound = [s for s in (
+            self._sfx("plant1.ogg"),
+            self._sfx("plant2.ogg"),
+            self._sfx("plant3.ogg"),
+        ) if s]
+        self.buildSound = [s for s in (
+            self._sfx("stone1.ogg"),
+            self._sfx("stone2.ogg"),
+            self._sfx("stone3.ogg"),
+            self._sfx("stone4.ogg"),
+        ) if s]
+
+        # Button data (robust; supports CSV, spaces, or old per-digit; safe default)
+        default_button_data = [
+            [2, 3, 10, 12, 0, 0, 0, 0],  # top row
+            [8, 6, 0, 0, 0, 0, 0, 1],  # bottom row (menu at end)
+        ]
+        btn_path = ASSETS / "buttondata.txt"
+        self.buttonData = default_button_data
+        try:
+            text = btn_path.read_text(encoding="utf-8").strip()
+            if text:
+                parsed = []
+                for line in (ln.strip() for ln in text.splitlines() if ln.strip()):
+                    if "," in line or " " in line or "\t" in line:
+                        tokens = [t for t in line.replace(",", " ").split()]
+                        row = [int(t) for t in tokens]
+                    else:
+                        row = [int(ch) for ch in line]
+                    row = (row + [0] * 8)[:8]
+                    parsed.append(row)
+                if len(parsed) >= 2:
+                    self.buttonData = [parsed[0][:8], parsed[1][:8]]
+        except FileNotFoundError:
+            pass
+
+        # --- button images ---
         self.menuButton = self._img("MenuButton.png", (126, 83))
         self.buttonBackgroundReleased = self._img("Button Backgrounds Released.png", (126, 83))
         self.harvestButton = self._img("Farm Tool Button Icon.png", (126, 83))
@@ -171,52 +313,58 @@ class GameApp:
 
         self.buttonTypes = [
             self.buttonBackgroundReleased, self.menuButton,
-            self.harvestButton, self.buildButton, self.harvestButtonToggled, self.buildButtonToggled,
+            self.harvestButton, self.buildButton,
+            self.harvestButtonToggled, self.buildButtonToggled,
             self.wheatButton, self.wheatButtonToggled,
             self.cocoaButton, self.cocoaButtonToggled,
             self.shovelButton, self.shovelButtonToggled,
             self.automationTool, self.automationToolToggled
         ]
 
-        # Geometry for buttons
+        # --- button geometry ---
+
         self.button_positions = [8, 142, 276, 410, 544, 678, 812, 946,
                                  8, 142, 276, 410, 544, 678, 812, 946]
-        self.button_y_positions = [544, 544, 544, 544, 544, 544, 544, 544,
-                                   635, 635, 635, 635, 635, 635, 635, 635]
+        top_y = geo_h - 176  # 720-544 when geo_h=720
+        bot_y = geo_h - 85  # 720-635 when geo_h=720
+        self.button_y_positions = [top_y] * 8 + [bot_y] * 8
 
-        # Build menu button rects
-        menuButtonHitboxes = [
-            [self.inScreenButtonX, self.screen.get_height() - 1.25 * self.menu_img.get_height() + off]
-            for off in (71, 131, 191, 251, 311, 371, 431)
-        ]
+        # --- in-menu button rects (needs self.inScreenButtonX set elsewhere in __init__) ---
+        menu_w, menu_h = self.menu_img.get_size()
+        x0 = geo_w - int(1.25 * menu_w)
+        y0 = geo_h - int(1.25 * menu_h)
+        self.inScreenButtonX = x0 + 18
+
+        menuButtonHitboxes = [[self.inScreenButtonX, y0 + off]
+                              for off in (71, 131, 191, 251, 311, 371, 431)]
         self.menu_button_rects = make_menu_button_rects(self.inScreenButtonX, menuButtonHitboxes)
 
-        # Build tile rects
+        # --- tile rects (click detection) ---
         self.tile_rects = [pg.Rect(x, y, TILE_W, TILE_H) for (x, y) in self.tile_positions]
 
-        # Coordinates for resource +/- in market
+        # --- Market +/- hitboxes ---
         self.wheatPlusRect = pg.Rect(500, 182 + 3 + 64 + 62, 25, 15)
         self.wheatMinusRect = pg.Rect(500 + 38, 182 + 3 + 64 + 62, 25, 15)
         self.cocoaMinusRect = pg.Rect(500 + 38, 182 + 3 + 105 + 62, 25, 15)
         self.cocoaPlusRect = pg.Rect(500, 182 + 3 + 105 + 62, 25, 15)
 
-        # ---- UI state ----
+        # --- UI state defaults ---
         self.menuActive = False
         self.resourcesOpened = False
         self.marketOpened = False
         self.automationOpened = False
 
-        self.toolActive: str | None = None
-        self.selectedTile: int | None = None
-        self.selectedButton: int | None = None
+        self.toolActive = None  # type: str | None
+        self.selectedTile = None  # type: int | None
+        self.selectedButton = None  # type: int | None
 
         # Floating message (errors, tips)
-        self.display_message: str | None = None
+        self.display_message = None  # type: str | None
         self.message_start_time = 0.0
         self.message_duration = 3.0
         self.message_position = (0, 0)
 
-        # Misc togglers (keep parity with old logic)
+        # Toggles (preserve original semantics)
         self.farmingToolTog = 1
         self.buildingToolTog = 1
         self.demoTog = 0
@@ -225,18 +373,31 @@ class GameApp:
         self.cocoaSeedsTog = 1
         self.menuTog = 0
 
-        # Progress bar alias for older calls
+        # Alias used elsewhere
         self.progressBars = self.progressBarTypes
 
     # ---------- helpers ----------
     def _flash(self, msg: str) -> None:
         self.display_message = msg
         self.message_start_time = time.time()
-        self.message_position = pg.mouse.get_pos()
+        self.message_position = self._mouse_pos()
 
     def _blit_label(self, text: str, pos: tuple[int, int]) -> None:
         surf = self.font.render(str(text), True, (199, 178, 153))
         self.screen.blit(surf, pos)
+
+    def _mouse_pos(self) -> tuple[int, int]:
+        """Return mouse position in the same coordinate space we draw in."""
+        mx, my = pg.mouse.get_pos()
+        # if we draw to a logical canvas, convert window coords → logical coords
+        if getattr(self, "logical", None):
+            sw, sh = self.screen.get_size()
+            lw, lh = self.logical.get_size()
+            # avoid divide-by-zero; int math keeps it stable
+            if sw > 0 and sh > 0:
+                mx = mx * lw // sw
+                my = my * lh // sh
+        return (mx, my)
 
     # ---------- in-game menu ----------
     def menu_display(self) -> None:
@@ -278,9 +439,9 @@ class GameApp:
         box = self.inMenuResourcesTextBox
         screen.blit(box, (363, 182))
         # GOLD / WHEAT / COCOA
-        self._blit_label(self.save[0], (363 + 60,  182 + 3 + 62))
-        self._blit_label(self.save[1], (363 + 74,  182 + 64 + 62))
-        self._blit_label(self.save[2], (363 + 72,  182 + 105 + 62))
+        self._blit_label(self.save[0], (363 + 60, 182 + 3 + 62))
+        self._blit_label(self.save[1], (363 + 74, 182 + 64 + 62))
+        self._blit_label(self.save[2], (363 + 72, 182 + 105 + 62))
 
     def _draw_market_panel(self) -> None:
         screen = self.screen
@@ -288,16 +449,16 @@ class GameApp:
         screen.blit(box, (363, 182))
 
         # GOLD (display only)
-        self._blit_label(self.save[0], (363 + 60,  182 + 3 + 62))
+        self._blit_label(self.save[0], (363 + 60, 182 + 3 + 62))
 
         # WHEAT (value + +/-)
-        self._blit_label(self.save[1], (363 + 74,  182 + 64 + 62))
-        screen.blit(self.plus,  self.wheatPlusRect.topleft)
+        self._blit_label(self.save[1], (363 + 74, 182 + 64 + 62))
+        screen.blit(self.plus, self.wheatPlusRect.topleft)
         screen.blit(self.minus, self.wheatMinusRect.topleft)
 
         # COCOA (value + +/-)
-        self._blit_label(self.save[2], (363 + 72,  182 + 105 + 62))
-        screen.blit(self.plus,  self.cocoaPlusRect.topleft)
+        self._blit_label(self.save[2], (363 + 72, 182 + 105 + 62))
+        screen.blit(self.plus, self.cocoaPlusRect.topleft)
         screen.blit(self.minus, self.cocoaMinusRect.topleft)
 
     # ---------- main update/draw ----------
@@ -305,17 +466,20 @@ class GameApp:
         # Auto-harvest for automated farms
         for fm in self.cocoaFarmList:
             if fm.auto == 1 and fm.update >= 100:
-                fm.rewardUpdate(); fm.update = 0
+                fm.rewardUpdate();
+                fm.update = 0
         for fm in self.wheatFarmList:
             if fm.auto == 1 and fm.update >= 100:
-                fm.rewardUpdate(); fm.update = 0
+                fm.rewardUpdate();
+                fm.update = 0
 
         for event in pg.event.get():
             if event.type == pg.QUIT:
-                pg.quit(); sys.exit()
+                pg.quit();
+                sys.exit()
 
             if event.type == pg.MOUSEBUTTONUP:
-                pos = pg.mouse.get_pos()
+                pos = self._mouse_pos()
                 self.selectedTile = None
                 self.selectedButton = None
 
@@ -353,40 +517,123 @@ class GameApp:
                     self._handle_tile_action(self.selectedTile)
 
     def draw(self) -> None:
-        screen = self.screen
+        """
+        Frame render:
+          1) draw base tiles from mapData
+          2) draw farms (with growth stages)
+          3) draw HUD overlay
+          4) draw in-game menu (Resources/Market) if open
+          5) draw floating message (errors/tips)
+          6) draw tool buttons (with toggled visuals)
+        NOTE: This renders to the logical canvas if S.SCALE_TO_WINDOW is True.
+        """
+        # --- pick target surface (logical canvas or the real screen) ---
+        canvas = self.logical if getattr(self, "logical", None) else self.screen
+        canvas.fill(S.BLACK)
 
-        # Tiles (base terrain)
+        # ---------- 1) BASE TILES ----------
+        # Show locked / unlocked / established for each cell.
+        # If the code is a farm (3/4), draw established as the base and the farm sprite on top.
         idx = 0
-        for row in self.mapData:
-            for _ in row:
+        for r in range(4):
+            row = self.mapData[r]
+            for c in range(8):
                 x, y = self.tile_positions[idx]
-                code = int(row[idx % len(row)])
-                screen.blit(self.tileTypes[code], (x, y))
+                code = int(row[c])
+                if code == 0:
+                    base = self.lockedLand
+                elif code == 1:
+                    base = self.unlockedLand
+                else:
+                    # 2 (established), 3 (cocoa farm), 4 (wheat farm) use established as base
+                    base = self.establishedLand
+                canvas.blit(base, (x, y))
                 idx += 1
 
-        # Farms grow + render
+        # ---------- 2) FARMS (growth + sprite) ----------
+        # upgrade growth and render current stage
         for fm in self.cocoaFarmList:
             fm.upgrade()
-            fm.displayFarm(screen, self.iconTypes, self.iconPos, self.progressBars, self.wheatStages, self.cocoaStages)
+            fm.displayFarm(canvas, self.iconTypes, self.iconPos, self.progressBars, self.wheatStages, self.cocoaStages)
         for fm in self.wheatFarmList:
             fm.upgrade()
-            fm.displayFarm(screen, self.iconTypes, self.iconPos, self.progressBars, self.wheatStages, self.cocoaStages)
+            fm.displayFarm(canvas, self.iconTypes, self.iconPos, self.progressBars, self.wheatStages, self.cocoaStages)
 
-        # HUD overlay
-        screen.blit(self.HUD, (0, 0))
+        # ---------- 3) HUD OVERLAY ----------
+        canvas.blit(self.HUD, (0, 0))
 
-        # Floating message
+        # ---------- 4) IN-GAME MENU ----------
+        if self.menuActive:
+            # bottom-right anchor for the menu panel
+            menu = self.menu_img
+            menu_w, menu_h = menu.get_size()
+            x0 = canvas.get_width() - int(1.25 * menu_w)
+            y0 = canvas.get_height() - int(1.25 * menu_h)
+            canvas.blit(menu, (x0, y0))
+
+            # 7 stacked buttons (first 3 are tabs)
+            y_offs = [71, 131, 191, 251, 311, 371, 431]
+
+            # Resources tab
+            btn0 = self.inMenuButtons[2] if self.resourcesOpened else self.inMenuButtons[1]
+            canvas.blit(btn0, (self.inScreenButtonX, y0 + y_offs[0]))
+
+            # Market tab
+            btn1 = self.inMenuButtons[4] if self.marketOpened else self.inMenuButtons[3]
+            canvas.blit(btn1, (self.inScreenButtonX, y0 + y_offs[1]))
+
+            # Automation tab (toggle look only; panel optional)
+            btn2 = self.inMenuButtons[6] if self.automationOpened else self.inMenuButtons[5]
+            canvas.blit(btn2, (self.inScreenButtonX, y0 + y_offs[2]))
+
+            # Remaining filler tiles
+            for i in range(3, 7):
+                canvas.blit(self.inMenuButtons[0], (self.inScreenButtonX, y0 + y_offs[i]))
+
+            # Panels
+            if self.resourcesOpened:
+                # Resources panel box
+                box_pos = (363, 182)
+                canvas.blit(self.inMenuResourcesTextBox, box_pos)
+                # GOLD / WHEAT / COCOA labels
+                #   save[0] gold, save[1] wheat, save[2] cocoa
+                gold_pos = (363 + 60, 182 + 3 + 62)
+                wheat_pos = (363 + 74, 182 + 64 + 62)
+                cocoa_pos = (363 + 72, 182 + 105 + 62)
+                canvas.blit(self.font.render(str(self.save[0]), True, (199, 178, 153)), gold_pos)
+                canvas.blit(self.font.render(str(self.save[1]), True, (199, 178, 153)), wheat_pos)
+                canvas.blit(self.font.render(str(self.save[2]), True, (199, 178, 153)), cocoa_pos)
+
+            if self.marketOpened:
+                # Market panel box
+                box_pos = (363, 182)
+                canvas.blit(self.inMenuBazaarTextBox, box_pos)
+
+                # GOLD display
+                gold_pos = (363 + 60, 182 + 3 + 62)
+                canvas.blit(self.font.render(str(self.save[0]), True, (199, 178, 153)), gold_pos)
+
+                # WHEAT value + +/- buttons
+                wheat_pos = (363 + 74, 182 + 64 + 62)
+                canvas.blit(self.font.render(str(self.save[1]), True, (199, 178, 153)), wheat_pos)
+                canvas.blit(self.plus, self.wheatPlusRect.topleft)
+                canvas.blit(self.minus, self.wheatMinusRect.topleft)
+
+                # COCOA value + +/- buttons
+                cocoa_pos = (363 + 72, 182 + 105 + 62)
+                canvas.blit(self.font.render(str(self.save[2]), True, (199, 178, 153)), cocoa_pos)
+                canvas.blit(self.plus, self.cocoaPlusRect.topleft)
+                canvas.blit(self.minus, self.cocoaMinusRect.topleft)
+
+        # ---------- 5) FLOATING MESSAGE ----------
         if self.display_message and (time.time() - self.message_start_time) < self.message_duration:
-            txt = self.font.render(self.display_message, True, (255, 0, 0))
+            txt = self.font.render(self.display_message, True, (255, 80, 80))
             mx, my = self.message_position
-            screen.blit(txt, (mx + 10, my + 10))
+            canvas.blit(txt, (mx + 10, my + 10))
         else:
             self.display_message = None
 
-        # In-game menu
-        if self.menuActive:
-            self.menu_display()
-        # Buttons (draw last so they sit above the HUD)
+        # ---------- 6) TOOL BUTTONS (draw last, above HUD) ----------
         self._update_button_visuals()
         for row_idx, row in enumerate(self.buttonData):
             for col_idx, code in enumerate(row):
@@ -394,7 +641,7 @@ class GameApp:
                 i = row_idx * 8 + col_idx
                 x = self.button_positions[i]
                 y = self.button_y_positions[i]
-                self.screen.blit(img, (x, y))
+                canvas.blit(img, (x, y))
 
     # ---------- helpers: visuals ----------
     def _update_button_visuals(self) -> None:
@@ -417,25 +664,26 @@ class GameApp:
     # ---------- helpers: input ----------
     def _handle_tool_button(self, btn: int) -> None:
         """Toggle tools or open menu based on which button index was clicked."""
+
         def toggle(tool_name: str, attr: str):
             val = getattr(self, attr)
             # odd -> turn on; even -> turn off
             self.toolActive = tool_name if (val % 2) else None
             setattr(self, attr, val + 1)
 
-        if btn == 0:          # harvest/farming
+        if btn == 0:  # harvest/farming
             toggle("farming", "farmingToolTog")
-        elif btn == 1:        # building
+        elif btn == 1:  # building
             toggle("building", "buildingToolTog")
-        elif btn == 2:        # demo
+        elif btn == 2:  # demo
             toggle("demo", "demoTog")
-        elif btn == 3:        # automation
+        elif btn == 3:  # automation
             toggle("automation", "automationTog")
-        elif btn == 8:        # cocoa seeds
+        elif btn == 8:  # cocoa seeds
             toggle("cocoaSeeds", "cocoaSeedsTog")
-        elif btn == 9:        # wheat seeds
+        elif btn == 9:  # wheat seeds
             toggle("wheatSeeds", "wheatSeedsTog")
-        elif btn == 15:       # menu button (bottom-right)
+        elif btn == 15:  # menu button (bottom-right)
             self.menuActive = (self.menuTog % 2 == 0)
             self.menuTog += 1
 
@@ -460,7 +708,9 @@ class GameApp:
         wheatGoldCost, wheatCocoaCost = 15, 5
         wheatSellPrice, cocoaSellPrice = 5, 3
 
-        gold = int(self.save[0]); wheat = int(self.save[1]); cocoa = int(self.save[2])
+        gold = int(self.save[0]);
+        wheat = int(self.save[1]);
+        cocoa = int(self.save[2])
 
         # Wheat +
         if self.wheatPlusRect.collidepoint(pos):
@@ -521,7 +771,9 @@ class GameApp:
         automationCocoaFarmGoldCost, automationCocoaFarmCocoaCost = 750, 250
         automationWheatFarmGoldCost, automationWheatFarmWheatCost = 300, 100
 
-        gold = int(self.save[0]); wheat = int(self.save[1]); cocoa = int(self.save[2])
+        gold = int(self.save[0]);
+        wheat = int(self.save[1]);
+        cocoa = int(self.save[2])
 
         # Neighbor check: allow unlocking only if any neighbor is >0
         neighbor_has_land = any(int(self.mapData[nr][nc]) > 0
@@ -545,9 +797,16 @@ class GameApp:
                 self._set_map_code(r, c, 3)
                 gold -= cocoaFarmUpgradeGoldCost
                 cocoa -= cocoaFarmUpgradeCocoaCost
-                fm = farm(); fm.farmType = 3; fm.location = (r, c); fm.tileLocation = tile_idx
+
+                fm = farm(self)
+                fm.farmType = 3
+                fm.location = (r, c)
+                fm.tileLocation = tile_idx  # <-- use the index passed into this handler
                 self.cocoaFarmList.append(fm)
-                pg.mixer.Sound.play(self.plantSound[random.randrange(3)])
+                self._set_auto_flag(r, c, 0)  # new farms start non-automated
+
+                if self.plantSound:  # play sound if mixer/asset loaded
+                    pg.mixer.Sound.play(self.plantSound[random.randrange(len(self.plantSound))])
             else:
                 self._flash("Need 100 gold + 15 cocoa and established land.")
 
@@ -557,9 +816,16 @@ class GameApp:
                 self._set_map_code(r, c, 4)
                 gold -= wheatFarmUpgradeGoldCost
                 wheat -= wheatFarmUpgradeWheatCost
-                fm = farm(); fm.farmType = 4; fm.location = (r, c); fm.tileLocation = tile_idx
+
+                fm = farm(self)
+                fm.farmType = 4
+                fm.location = (r, c)
+                fm.tileLocation = tile_idx
                 self.wheatFarmList.append(fm)
-                pg.mixer.Sound.play(self.plantSound[random.randrange(3)])
+                self._set_auto_flag(r, c, 0)
+
+                if self.plantSound:
+                    pg.mixer.Sound.play(self.plantSound[random.randrange(len(self.plantSound))])
             else:
                 self._flash("Need 300 gold + 15 wheat and established land.")
 
@@ -568,11 +834,13 @@ class GameApp:
             # cocoa
             for fm in self.cocoaFarmList:
                 if fm.tileLocation == tile_idx and fm.update >= 100:
-                    fm.rewardUpdate(); fm.update = 0
+                    fm.rewardUpdate();
+                    fm.update = 0
             # wheat
             for fm in self.wheatFarmList:
                 if fm.tileLocation == tile_idx and fm.update >= 100:
-                    fm.rewardUpdate(); fm.update = 0
+                    fm.rewardUpdate();
+                    fm.update = 0
 
         # DEMOLISH
         elif self.toolActive == "demo":
@@ -580,7 +848,7 @@ class GameApp:
                 self._set_map_code(r, c, 1)
                 if code == 3:  # cocoa
                     self.cocoaFarmList[:] = [fm for fm in self.cocoaFarmList if fm.tileLocation != tile_idx]
-                else:          # wheat
+                else:  # wheat
                     self.wheatFarmList[:] = [fm for fm in self.wheatFarmList if fm.tileLocation != tile_idx]
 
         # AUTOMATION
@@ -624,6 +892,11 @@ class GameApp:
             dt = self.clock.tick(FPS) / 1000.0
             self.update(dt)
             self.draw()
+            if self.logical:
+                # scale the logical canvas up to the actual window size
+                scaled = pg.transform.smoothscale(self.logical, self.screen.get_size())
+                self.screen.fill(S.BLACK)
+                self.screen.blit(scaled, (0, 0))
             pg.display.flip()
             # end while
         pg.quit()

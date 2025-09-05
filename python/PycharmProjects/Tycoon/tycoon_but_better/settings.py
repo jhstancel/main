@@ -2,16 +2,17 @@
 import pygame as pg
 
 TITLE = "Chocolate Tycoon (Remade)"
-WINDOW_W, WINDOW_H = 1280, 720
+# settings.py
+WINDOW_W, WINDOW_H = 1280, 720   # keep if you like a bigger window
+LOGICAL_W, LOGICAL_H = 1080, 720 # << this must match your art
+SCALE_TO_WINDOW = True
+
 FPS = 60
 
 # Colors
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 
-# If your old code used a "logical" canvas and scaled to fit:
-LOGICAL_W, LOGICAL_H = 960, 540  # keep your original coordinate system if needed
-SCALE_TO_WINDOW = True  # set False if you draw directly at WINDOW size
 
 # Menu/UI geometry used by your existing helpers
 MENU_BUTTON_W, MENU_BUTTON_H = 124, 38

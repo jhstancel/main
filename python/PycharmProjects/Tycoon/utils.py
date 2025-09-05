@@ -1,5 +1,5 @@
 gameName = "TYCOON"
-root = "C:\\Users\\black\PycharmProjects\Tycoon\saveFiles\\"
+root = "C:\\Users\\black\\code\\main\\python\\PycharmProjects\\Tycoon\\saveFiles"
 newFileFormat = "0\n" \
                 "0\n" \
                 "0\n" \
